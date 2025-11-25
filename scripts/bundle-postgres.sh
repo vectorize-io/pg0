@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/../versions.env"
 PG_VERSION="${PG_VERSION}"
 PGVECTOR_VERSION="${PGVECTOR_VERSION}"
 PGVECTOR_COMPILED_TAG="${PGVECTOR_COMPILED_TAG}"
+PGVECTOR_COMPILED_REPO="${PGVECTOR_COMPILED_REPO:-portalcorp/pgvector_compiled}"
 
 # Platforms to build for (only those with pgvector pre-compiled binaries available)
 PLATFORMS=(
@@ -56,10 +57,9 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         PG_DIR="$WORK_DIR"
     fi
 
-    # Download pgvector from portalcorp (pre-compiled)
-    # URL format: pgvector-{platform}-pg{major}.tar.gz
+    # Download pgvector (pre-compiled)
     PG_MAJOR=$(echo "$PG_VERSION" | cut -d. -f1)
-    PGVECTOR_URL="https://github.com/portalcorp/pgvector_compiled/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${PLATFORM}-pg${PG_MAJOR}.tar.gz"
+    PGVECTOR_URL="https://github.com/${PGVECTOR_COMPILED_REPO}/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${PLATFORM}-pg${PG_MAJOR}.tar.gz"
 
     echo "Downloading pgvector from $PGVECTOR_URL"
     if curl -fsSL "$PGVECTOR_URL" -o "$WORK_DIR/pgvector.tar.gz"; then

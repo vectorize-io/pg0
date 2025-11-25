@@ -88,6 +88,7 @@ jobs:
           echo "PG_VERSION=$PG_VERSION" >> $GITHUB_OUTPUT
           echo "PGVECTOR_VERSION=$PGVECTOR_VERSION" >> $GITHUB_OUTPUT
           echo "PGVECTOR_COMPILED_TAG=$PGVECTOR_COMPILED_TAG" >> $GITHUB_OUTPUT
+          echo "PGVECTOR_COMPILED_REPO=${PGVECTOR_COMPILED_REPO:-portalcorp/pgvector_compiled}" >> $GITHUB_OUTPUT
 
       - name: Download PostgreSQL
         shell: bash
@@ -104,8 +105,9 @@ jobs:
         run: |
           PG_VERSION="${{ steps.versions.outputs.PG_VERSION }}"
           PGVECTOR_COMPILED_TAG="${{ steps.versions.outputs.PGVECTOR_COMPILED_TAG }}"
+          PGVECTOR_COMPILED_REPO="${{ steps.versions.outputs.PGVECTOR_COMPILED_REPO }}"
           PG_MAJOR=$(echo "$PG_VERSION" | cut -d. -f1)
-          PGVECTOR_URL="https://github.com/portalcorp/pgvector_compiled/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${{ matrix.pg_target }}-pg${PG_MAJOR}.tar.gz"
+          PGVECTOR_URL="https://github.com/${PGVECTOR_COMPILED_REPO}/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${{ matrix.pg_target }}-pg${PG_MAJOR}.tar.gz"
           echo "Downloading pgvector from $PGVECTOR_URL"
 
           curl -fsSL "$PGVECTOR_URL" -o pgvector.tar.gz
@@ -165,24 +167,23 @@ jobs:
           ls -la release/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: release/*
-          generate_release_notes: true
-          body: |
-            ## Embedded PostgreSQL CLI
-
-            ### CLI Binaries
-            Download the CLI for your platform:
-            - `embedded-postgres-darwin-aarch64` - macOS Apple Silicon
-            - `embedded-postgres-linux-x86_64` - Linux x86_64
-            - `embedded-postgres-windows-x86_64.exe` - Windows x64
-
-            ### PostgreSQL Bundles (with pgvector)
-            These are automatically downloaded by the CLI on first run:
-            - PostgreSQL ${{ steps.versions.outputs.PG_VERSION }} with pgvector ${{ steps.versions.outputs.PGVECTOR_VERSION }}
-
-            ### Installation (macOS/Linux)
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/vectorize-io/embedded-pg-cli/main/install.sh | bash
-            ```
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PG_VERSION: ${{ steps.versions.outputs.PG_VERSION }}
+          PGVECTOR_VERSION: ${{ steps.versions.outputs.PGVECTOR_VERSION }}
+        run: |
+          echo "## Embedded PostgreSQL CLI" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### CLI Binaries" >> release_notes.md
+          echo "- \`embedded-postgres-darwin-aarch64\` - macOS Apple Silicon" >> release_notes.md
+          echo "- \`embedded-postgres-linux-x86_64\` - Linux x86_64" >> release_notes.md
+          echo "- \`embedded-postgres-windows-x86_64.exe\` - Windows x64" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### PostgreSQL Bundles (with pgvector)" >> release_notes.md
+          echo "- PostgreSQL ${PG_VERSION} with pgvector ${PGVECTOR_VERSION}" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Installation (macOS/Linux)" >> release_notes.md
+          echo "\`\`\`bash" >> release_notes.md
+          echo "curl -fsSL https://raw.githubusercontent.com/vectorize-io/embedded-pg-cli/main/install.sh | bash" >> release_notes.md
+          echo "\`\`\`" >> release_notes.md
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md release/*
