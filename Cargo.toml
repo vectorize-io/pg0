@@ -1,6 +1,6 @@
 [package]
 name = "embedded-postgres-cli"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 description = "CLI to run embedded PostgreSQL without installation"
 license = "MIT"

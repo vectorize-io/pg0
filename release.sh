@@ -80,13 +80,9 @@ echo "Updating Cargo.toml version to $VERSION..."
 sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
 rm -f Cargo.toml.bak
 
-# Update Cargo.lock
-echo "Updating Cargo.lock..."
-cargo check --quiet 2>/dev/null || true
-
 # Commit the version bump
 echo "Committing version bump..."
-git add Cargo.toml Cargo.lock
+git add Cargo.toml
 git commit -m "chore: bump version to $VERSION"
 
 # Create and push tag
