@@ -168,7 +168,7 @@ jobs:
 
       - name: Create Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           PG_VERSION: ${{ steps.versions.outputs.PG_VERSION }}
           PGVECTOR_VERSION: ${{ steps.versions.outputs.PGVECTOR_VERSION }}
         run: |
