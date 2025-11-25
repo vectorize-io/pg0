@@ -107,11 +107,8 @@ main() {
     fi
 
     echo ""
-    echo "Usage:"
-    echo "  ${BINARY_NAME} start    # Start PostgreSQL"
-    echo "  ${BINARY_NAME} stop     # Stop PostgreSQL"
-    echo "  ${BINARY_NAME} status   # Check status"
-    echo "  ${BINARY_NAME} uri      # Get connection URI"
+    echo "pg0 is now available."
+    pg0 -h
 }
 
 main "$@"

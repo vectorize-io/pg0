@@ -60,17 +60,14 @@ pg0 start --port 5433 --username myuser --password mypass --database myapp
 pg0 stop
 ```
 
-### Check Status
+### Get Server Info
 
 ```bash
-pg0 status
-```
+# Human-readable format
+pg0 info
 
-### Get Connection URI
-
-```bash
-pg0 uri
-# Output: postgresql://postgres:postgres@localhost:5432/postgres
+# JSON output
+pg0 info -o json
 ```
 
 ### Open psql Shell

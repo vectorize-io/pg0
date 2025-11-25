@@ -73,10 +73,12 @@ enum Commands {
     },
     /// Stop PostgreSQL server
     Stop,
-    /// Show status of PostgreSQL server
-    Status,
-    /// Get connection URI
-    Uri,
+    /// Show PostgreSQL server info (status, connection URI, etc.)
+    Info {
+        /// Output format
+        #[arg(short, long, default_value = "text")]
+        output: OutputFormat,
+    },
     /// Open psql shell connected to the running instance
     Psql {
         /// Additional arguments to pass to psql
@@ -92,6 +94,13 @@ enum Commands {
     ListExtensions,
 }
 
+#[derive(Clone, Debug, Default, clap::ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
 #[derive(Serialize, Deserialize)]
 struct InstanceInfo {
     pid: u32,
@@ -102,6 +111,25 @@ struct InstanceInfo {
     password: String,
     database: String,
     version: String,
+}
+
+#[derive(Serialize)]
+struct InfoOutput {
+    running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uri: Option<String>,
 }
 
 fn get_state_dir() -> Result<PathBuf, CliError> {
@@ -497,41 +525,67 @@ fn stop() -> Result<(), CliError> {
     Ok(())
 }
 
-fn status() -> Result<(), CliError> {
-    match load_instance()? {
+fn info(output_format: OutputFormat) -> Result<(), CliError> {
+    let instance = match load_instance()? {
         Some(info) => {
             if is_process_running(info.pid) {
-                println!("PostgreSQL is running");
-                println!("  PID:      {}", info.pid);
-                println!("  Port:     {}", info.port);
-                println!("  Version:  {}", info.version);
-                println!("  Username: {}", info.username);
-                println!("  Database: {}", info.database);
-                println!("  Data dir: {}", info.data_dir.display());
+                Some(info)
             } else {
-                println!("PostgreSQL is not running (stale state)");
                 remove_instance()?;
+                None
             }
         }
-        None => {
-            println!("PostgreSQL is not running");
+        None => None,
+    };
+
+    let output = if let Some(info) = instance {
+        let uri = format!(
+            "postgresql://{}:{}@localhost:{}/{}",
+            info.username, info.password, info.port, info.database
+        );
+        InfoOutput {
+            running: true,
+            pid: Some(info.pid),
+            port: Some(info.port),
+            version: Some(info.version),
+            username: Some(info.username),
+            database: Some(info.database),
+            data_dir: Some(info.data_dir.display().to_string()),
+            uri: Some(uri),
+        }
+    } else {
+        InfoOutput {
+            running: false,
+            pid: None,
+            port: None,
+            version: None,
+            username: None,
+            database: None,
+            data_dir: None,
+            uri: None,
+        }
+    };
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        OutputFormat::Text => {
+            if output.running {
+                println!("PostgreSQL is running");
+                println!("  PID:      {}", output.pid.unwrap());
+                println!("  Port:     {}", output.port.unwrap());
+                println!("  Version:  {}", output.version.as_ref().unwrap());
+                println!("  Username: {}", output.username.as_ref().unwrap());
+                println!("  Database: {}", output.database.as_ref().unwrap());
+                println!("  Data dir: {}", output.data_dir.as_ref().unwrap());
+                println!();
+                println!("URI: {}", output.uri.as_ref().unwrap());
+            } else {
+                println!("PostgreSQL is not running");
+            }
         }
     }
-    Ok(())
-}
-
-fn uri() -> Result<(), CliError> {
-    let info = load_instance()?.ok_or(CliError::NoInstance)?;
-
-    if !is_process_running(info.pid) {
-        remove_instance()?;
-        return Err(CliError::NoInstance);
-    }
-
-    println!(
-        "postgresql://{}:{}@localhost:{}/{}",
-        info.username, info.password, info.port, info.database
-    );
 
     Ok(())
 }
@@ -713,8 +767,7 @@ fn main() {
             database,
         } => start(port, version, data_dir, username, password, database),
         Commands::Stop => stop(),
-        Commands::Status => status(),
-        Commands::Uri => uri(),
+        Commands::Info { output } => info(output),
         Commands::Psql { args } => psql(args),
         Commands::InstallExtension { name } => install_extension(name),
         Commands::ListExtensions => list_extensions(),
