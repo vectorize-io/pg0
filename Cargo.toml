@@ -1,0 +1,27 @@
+[package]
+name = "embedded-postgres-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI to run embedded PostgreSQL without installation"
+license = "MIT"
+repository = "https://github.com/vectorize-io/embedded-pg-cli"
+
+[[bin]]
+name = "embedded-postgres"
+path = "src/main.rs"
+
+[dependencies]
+postgresql_embedded = { version = "0.20", default-features = false, features = ["blocking", "theseus", "native-tls"] }
+postgresql_extensions = { version = "0.20", features = ["blocking", "native-tls"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

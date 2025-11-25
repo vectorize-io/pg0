@@ -1,0 +1,572 @@
+use clap::{Parser, Subcommand};
+use postgresql_embedded::blocking::PostgreSQL;
+use postgresql_embedded::{Settings, VersionReq};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use std::process;
+use thiserror::Error;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Error, Debug)]
+enum CliError {
+    #[error("PostgreSQL error: {0}")]
+    PostgreSQL(#[from] postgresql_embedded::Error),
+    #[error("Extension error: {0}")]
+    Extension(#[from] postgresql_extensions::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("No running instance found")]
+    NoInstance,
+    #[error("Instance already running (pid: {0})")]
+    AlreadyRunning(u32),
+    #[error("Could not determine data directory")]
+    NoDataDir,
+    #[error("Failed to parse PID from postmaster.pid")]
+    PidParse,
+    #[error("Extension '{0}' not found")]
+    ExtensionNotFound(String),
+}
+
+#[derive(Parser)]
+#[command(name = "embedded-postgres")]
+#[command(about = "Run embedded PostgreSQL without installation", long_about = None)]
+#[command(version)]
+struct Cli {
+    /// Enable verbose logging
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start PostgreSQL server
+    Start {
+        /// Port to listen on
+        #[arg(short, long, default_value = "5432")]
+        port: u16,
+
+        /// PostgreSQL version (must match bundled version)
+        #[arg(short = 'V', long, default_value = env!("PG_VERSION"))]
+        version: String,
+
+        /// Data directory
+        #[arg(short, long, default_value = "~/.embedded-postgres/data")]
+        data_dir: String,
+
+        /// Username for the database
+        #[arg(short, long, default_value = "postgres")]
+        username: String,
+
+        /// Password for the database
+        #[arg(short = 'P', long, default_value = "postgres")]
+        password: String,
+
+        /// Database name to create
+        #[arg(short = 'n', long, default_value = "postgres")]
+        database: String,
+    },
+    /// Stop PostgreSQL server
+    Stop,
+    /// Show status of PostgreSQL server
+    Status,
+    /// Get connection URI
+    Uri,
+    /// Open psql shell connected to the running instance
+    Psql {
+        /// Additional arguments to pass to psql
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Install a PostgreSQL extension (e.g., pgvector)
+    InstallExtension {
+        /// Extension name (e.g., "vector", "postgis")
+        name: String,
+    },
+    /// List available extensions
+    ListExtensions,
+}
+
+#[derive(Serialize, Deserialize)]
+struct InstanceInfo {
+    pid: u32,
+    port: u16,
+    data_dir: PathBuf,
+    installation_dir: PathBuf,
+    username: String,
+    password: String,
+    database: String,
+    version: String,
+}
+
+fn get_state_dir() -> Result<PathBuf, CliError> {
+    dirs::home_dir()
+        .map(|h| h.join(".embedded-postgres"))
+        .ok_or(CliError::NoDataDir)
+}
+
+fn get_state_file() -> Result<PathBuf, CliError> {
+    Ok(get_state_dir()?.join("instance.json"))
+}
+
+fn load_instance() -> Result<Option<InstanceInfo>, CliError> {
+    let state_file = get_state_file()?;
+    if state_file.exists() {
+        let content = fs::read_to_string(&state_file)?;
+        Ok(Some(serde_json::from_str(&content)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn save_instance(info: &InstanceInfo) -> Result<(), CliError> {
+    let state_dir = get_state_dir()?;
+    fs::create_dir_all(&state_dir)?;
+    let state_file = get_state_file()?;
+    fs::write(&state_file, serde_json::to_string_pretty(info)?)?;
+    Ok(())
+}
+
+fn remove_instance() -> Result<(), CliError> {
+    let state_file = get_state_file()?;
+    if state_file.exists() {
+        fs::remove_file(&state_file)?;
+    }
+    Ok(())
+}
+
+fn is_process_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid)])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+            .unwrap_or(false)
+    }
+}
+
+/// Read the PID from PostgreSQL's postmaster.pid file
+fn read_postmaster_pid(data_dir: &PathBuf) -> Result<u32, CliError> {
+    let pid_file = data_dir.join("postmaster.pid");
+    let content = fs::read_to_string(&pid_file)?;
+    // First line of postmaster.pid is the PID
+    content
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse().ok())
+        .ok_or(CliError::PidParse)
+}
+
+/// Expand ~ to home directory
+fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(&path[2..]);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn start(
+    port: u16,
+    version: String,
+    data_dir: String,
+    username: String,
+    password: String,
+    database: String,
+) -> Result<(), CliError> {
+    // Check if already running
+    if let Some(info) = load_instance()? {
+        if is_process_running(info.pid) {
+            return Err(CliError::AlreadyRunning(info.pid));
+        }
+        // Stale instance, clean up
+        remove_instance()?;
+    }
+
+    let state_dir = get_state_dir()?;
+    let data_dir = expand_path(&data_dir);
+    let installation_dir = state_dir.join("installation");
+
+    fs::create_dir_all(&data_dir)?;
+    fs::create_dir_all(&installation_dir)?;
+
+    println!("Setting up PostgreSQL {}...", version);
+
+    let version_req: VersionReq = version.parse().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid version: {}", e),
+        )
+    })?;
+
+    // Use our own releases URL which includes PostgreSQL + pgvector bundled
+    let releases_url = "https://github.com/vectorize-io/embedded-pg-cli/releases".to_string();
+
+    let settings = Settings {
+        version: version_req,
+        port,
+        username: username.clone(),
+        password: password.clone(),
+        data_dir: data_dir.clone(),
+        installation_dir: installation_dir.clone(),
+        releases_url,
+        ..Default::default()
+    };
+
+    let mut postgresql = PostgreSQL::new(settings);
+
+    println!("Downloading and installing PostgreSQL (this may take a moment on first run)...");
+    postgresql.setup()?;
+
+    println!("Starting PostgreSQL on port {}...", port);
+    postgresql.start()?;
+
+    // Create the database if it doesn't exist and it's not the default 'postgres'
+    if database != "postgres" {
+        println!("Creating database '{}'...", database);
+        if let Err(e) = postgresql.create_database(&database) {
+            // Ignore error if database already exists
+            let err_str = e.to_string();
+            if !err_str.contains("already exists") {
+                return Err(e.into());
+            }
+        }
+    }
+
+    // Read PID from postmaster.pid file
+    let pid = read_postmaster_pid(&data_dir)?;
+
+    let info = InstanceInfo {
+        pid,
+        port,
+        data_dir: data_dir.clone(),
+        installation_dir,
+        username: username.clone(),
+        password: password.clone(),
+        database: database.clone(),
+        version: version.clone(),
+    };
+
+    save_instance(&info)?;
+
+    println!();
+    println!("PostgreSQL is running!");
+    println!("  PID:      {}", pid);
+    println!("  Port:     {}", port);
+    println!("  Username: {}", username);
+    println!("  Password: {}", password);
+    println!("  Database: {}", database);
+    println!("  Data dir: {}", data_dir.display());
+    println!();
+    println!(
+        "Connection URI: postgresql://{}:{}@localhost:{}/{}",
+        username, password, port, database
+    );
+    println!();
+    println!("Use 'embedded-postgres stop' to stop the server.");
+
+    // Detach - let the process continue running
+    std::mem::forget(postgresql);
+
+    Ok(())
+}
+
+fn stop() -> Result<(), CliError> {
+    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+
+    if !is_process_running(info.pid) {
+        println!("PostgreSQL is not running (stale state detected).");
+        remove_instance()?;
+        return Ok(());
+    }
+
+    println!("Stopping PostgreSQL (pid: {})...", info.pid);
+
+    // Send SIGTERM to gracefully stop
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let _ = Command::new("kill")
+            .args(["-TERM", &info.pid.to_string()])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &info.pid.to_string()])
+            .output();
+    }
+
+    // Wait a bit for graceful shutdown
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Force kill if still running
+    if is_process_running(info.pid) {
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            let _ = Command::new("kill")
+                .args(["-9", &info.pid.to_string()])
+                .output();
+        }
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &info.pid.to_string()])
+                .output();
+        }
+    }
+
+    remove_instance()?;
+    println!("PostgreSQL stopped.");
+
+    Ok(())
+}
+
+fn status() -> Result<(), CliError> {
+    match load_instance()? {
+        Some(info) => {
+            if is_process_running(info.pid) {
+                println!("PostgreSQL is running");
+                println!("  PID:      {}", info.pid);
+                println!("  Port:     {}", info.port);
+                println!("  Version:  {}", info.version);
+                println!("  Username: {}", info.username);
+                println!("  Database: {}", info.database);
+                println!("  Data dir: {}", info.data_dir.display());
+            } else {
+                println!("PostgreSQL is not running (stale state)");
+                remove_instance()?;
+            }
+        }
+        None => {
+            println!("PostgreSQL is not running");
+        }
+    }
+    Ok(())
+}
+
+fn uri() -> Result<(), CliError> {
+    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+
+    if !is_process_running(info.pid) {
+        remove_instance()?;
+        return Err(CliError::NoInstance);
+    }
+
+    println!(
+        "postgresql://{}:{}@localhost:{}/{}",
+        info.username, info.password, info.port, info.database
+    );
+
+    Ok(())
+}
+
+fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
+    // Look for psql in installation_dir/*/bin/psql (version subdirectory)
+    if let Ok(entries) = fs::read_dir(installation_dir) {
+        for entry in entries.flatten() {
+            let psql_path = entry.path().join("bin").join("psql");
+            if psql_path.exists() {
+                return Ok(psql_path);
+            }
+        }
+    }
+
+    // Fallback: try direct path (in case structure changes)
+    let direct_path = installation_dir.join("bin").join("psql");
+    if direct_path.exists() {
+        return Ok(direct_path);
+    }
+
+    Err(CliError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!(
+            "psql not found in {}",
+            installation_dir.display()
+        ),
+    )))
+}
+
+fn psql(args: Vec<String>) -> Result<(), CliError> {
+    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+
+    if !is_process_running(info.pid) {
+        remove_instance()?;
+        return Err(CliError::NoInstance);
+    }
+
+    let psql_path = find_psql_binary(&info.installation_dir)?;
+
+    // Build connection URI
+    let uri = format!(
+        "postgresql://{}:{}@localhost:{}/{}",
+        info.username, info.password, info.port, info.database
+    );
+
+    // Execute psql with the connection URI and any additional args
+    let status = std::process::Command::new(&psql_path)
+        .arg(&uri)
+        .args(&args)
+        .status()?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
+}
+
+fn find_installed_version(installation_dir: &PathBuf) -> Result<String, CliError> {
+    if let Ok(entries) = fs::read_dir(installation_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    // Check if it looks like a version directory
+                    if name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        return Ok(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Err(CliError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "No PostgreSQL version found in installation directory",
+    )))
+}
+
+fn install_extension(name: String) -> Result<(), CliError> {
+    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+
+    if !is_process_running(info.pid) {
+        remove_instance()?;
+        return Err(CliError::NoInstance);
+    }
+
+    println!("Fetching available extensions...");
+
+    let available = postgresql_extensions::blocking::get_available_extensions()?;
+
+    // Find the extension (case-insensitive search)
+    let ext = available
+        .iter()
+        .find(|e| e.name().to_lowercase() == name.to_lowercase())
+        .ok_or_else(|| CliError::ExtensionNotFound(name.clone()))?;
+
+    let ext_name = ext.name().to_string();
+    let ext_namespace = ext.namespace().to_string();
+    println!("Installing extension '{}'...", ext_name);
+
+    // Get installed PostgreSQL version
+    let pg_version = find_installed_version(&info.installation_dir)?;
+    let version_req: VersionReq = pg_version.parse().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid version: {}", e),
+        )
+    })?;
+
+    // Build Settings for the extension installer
+    // The installation_dir needs to point to the version-specific directory
+    let version_install_dir = info.installation_dir.join(&pg_version);
+    let settings = Settings {
+        version: version_req.clone(),
+        port: info.port,
+        username: info.username.clone(),
+        password: info.password.clone(),
+        data_dir: info.data_dir.clone(),
+        installation_dir: version_install_dir,
+        ..Default::default()
+    };
+
+    postgresql_extensions::blocking::install(
+        &settings,
+        &ext_namespace,
+        &ext_name,
+        &version_req,
+    )?;
+
+    println!("Extension '{}' installed successfully!", ext_name);
+    println!();
+    println!("To enable it in your database, run:");
+    println!("  embedded-postgres psql -c \"CREATE EXTENSION IF NOT EXISTS {};\"", ext_name);
+
+    Ok(())
+}
+
+fn list_extensions() -> Result<(), CliError> {
+    println!("Fetching available extensions...");
+
+    let extensions = postgresql_extensions::blocking::get_available_extensions()?;
+
+    println!();
+    println!("Available extensions:");
+    println!();
+
+    for ext in extensions {
+        println!("  {} - {}", ext.name(), ext.description());
+    }
+
+    Ok(())
+}
+
+fn init_logging(verbose: bool) {
+    let filter = if verbose {
+        EnvFilter::new("debug")
+    } else {
+        EnvFilter::new("warn")
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    init_logging(cli.verbose);
+
+    let result = match cli.command {
+        Commands::Start {
+            port,
+            version,
+            data_dir,
+            username,
+            password,
+            database,
+        } => start(port, version, data_dir, username, password, database),
+        Commands::Stop => stop(),
+        Commands::Status => status(),
+        Commands::Uri => uri(),
+        Commands::Psql { args } => psql(args),
+        Commands::InstallExtension { name } => install_extension(name),
+        Commands::ListExtensions => list_extensions(),
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        process::exit(1);
+    }
+}
