@@ -183,6 +183,130 @@ fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Get the current platform string for downloads
+fn get_platform() -> Option<&'static str> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { Some("aarch64-apple-darwin") }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { Some("x86_64-apple-darwin") }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { Some("x86_64-unknown-linux-gnu") }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { Some("aarch64-unknown-linux-gnu") }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    { Some("x86_64-pc-windows-msvc") }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+    )))]
+    { None }
+}
+
+/// Install pgvector extension files into the PostgreSQL installation
+fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), CliError> {
+    let platform = get_platform().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Unsupported, "Unsupported platform for pgvector")
+    })?;
+
+    let pg_major = pg_version.split('.').next().unwrap_or("16");
+    let pgvector_version = env!("PGVECTOR_VERSION");
+    let pgvector_tag = env!("PGVECTOR_COMPILED_TAG");
+    let pgvector_repo = env!("PGVECTOR_COMPILED_REPO");
+
+    let url = format!(
+        "https://github.com/{}/releases/download/{}/pgvector-{}-pg{}.tar.gz",
+        pgvector_repo, pgvector_tag, platform, pg_major
+    );
+
+    println!("Installing pgvector {}...", pgvector_version);
+    tracing::debug!("Downloading pgvector from {}", url);
+
+    // Find the version-specific installation directory
+    let version_dir = fs::read_dir(installation_dir)?
+        .filter_map(|e| e.ok())
+        .find(|e| e.path().is_dir() && e.file_name().to_string_lossy().starts_with(pg_major))
+        .map(|e| e.path())
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "PostgreSQL installation directory not found"
+        ))?;
+
+    let lib_dir = version_dir.join("lib");
+    let extension_dir = version_dir.join("share").join("extension");
+
+    // Check if pgvector is already installed
+    if extension_dir.join("vector.control").exists() {
+        tracing::debug!("pgvector already installed");
+        return Ok(());
+    }
+
+    // Download using curl
+    let temp_dir = std::env::temp_dir().join("pgvector_download");
+    fs::create_dir_all(&temp_dir)?;
+    let archive_path = temp_dir.join("pgvector.tar.gz");
+
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", &url, "-o"])
+        .arg(&archive_path)
+        .status()?;
+
+    if !status.success() {
+        fs::remove_dir_all(&temp_dir).ok();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to download pgvector from {}", url)
+        ).into());
+    }
+
+    // Extract using tar
+    let extract_dir = temp_dir.join("extracted");
+    fs::create_dir_all(&extract_dir)?;
+
+    let status = std::process::Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .status()?;
+
+    if !status.success() {
+        fs::remove_dir_all(&temp_dir).ok();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to extract pgvector archive"
+        ).into());
+    }
+
+    // Copy files to PostgreSQL installation
+    fn copy_files_recursive(src: &PathBuf, lib_dir: &PathBuf, ext_dir: &PathBuf) -> std::io::Result<()> {
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                copy_files_recursive(&path, lib_dir, ext_dir)?;
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".so") || name.ends_with(".dylib") || name.ends_with(".dll") {
+                    fs::copy(&path, lib_dir.join(name))?;
+                } else if name == "vector.control" || name.starts_with("vector--") {
+                    fs::copy(&path, ext_dir.join(name))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    copy_files_recursive(&extract_dir, &lib_dir, &extension_dir)?;
+
+    // Cleanup
+    fs::remove_dir_all(&temp_dir).ok();
+
+    println!("pgvector {} installed successfully!", pgvector_version);
+    Ok(())
+}
+
 fn start(
     port: u16,
     version: String,
@@ -216,9 +340,6 @@ fn start(
         )
     })?;
 
-    // Use our own releases URL which includes PostgreSQL + pgvector bundled
-    let releases_url = "https://github.com/vectorize-io/embedded-pg-cli/releases".to_string();
-
     let settings = Settings {
         version: version_req,
         port,
@@ -226,7 +347,6 @@ fn start(
         password: password.clone(),
         data_dir: data_dir.clone(),
         installation_dir: installation_dir.clone(),
-        releases_url,
         ..Default::default()
     };
 
@@ -234,6 +354,12 @@ fn start(
 
     println!("Downloading and installing PostgreSQL (this may take a moment on first run)...");
     postgresql.setup()?;
+
+    // Install pgvector extension
+    if let Err(e) = install_pgvector(&installation_dir, &version) {
+        eprintln!("Warning: Failed to install pgvector: {}", e);
+        eprintln!("You can try installing it manually with: embedded-postgres install-extension vector");
+    }
 
     println!("Starting PostgreSQL on port {}...", port);
     postgresql.start()?;
