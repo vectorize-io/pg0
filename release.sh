@@ -85,14 +85,15 @@ echo "Committing version bump..."
 git add Cargo.toml
 git commit -m "chore: bump version to $VERSION"
 
-# Create and push tag
+# Create tag
 echo "Creating tag $TAG..."
 git tag -a "$TAG" -m "Release $VERSION"
 
+# Push
+echo "Pushing to remote..."
+git push
+git push origin "$TAG"
+
 echo ""
-echo -e "${GREEN}Ready to release!${NC}"
-echo ""
-echo "To push the release, run:"
-echo -e "  ${YELLOW}git push && git push origin $TAG${NC}"
-echo ""
-echo "This will trigger the GitHub Actions release workflow."
+echo -e "${GREEN}Release $TAG pushed!${NC}"
+echo "GitHub Actions will now build and publish the release."
