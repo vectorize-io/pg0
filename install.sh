@@ -13,7 +13,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Detect OS and architecture
 detect_platform() {
-    local os arch
+    local os arch platform
 
     case "$(uname -s)" in
         Linux*)     os="linux";;
@@ -28,7 +28,24 @@ detect_platform() {
         *)              echo -e "${RED}Unsupported architecture: $(uname -m)${NC}"; exit 1;;
     esac
 
-    echo "${os}-${arch}"
+    platform="${os}-${arch}"
+
+    # Validate supported platforms (must have pgvector pre-compiled)
+    case "$platform" in
+        darwin-aarch64|linux-x86_64|windows-x86_64)
+            ;;
+        darwin-x86_64)
+            echo -e "${YELLOW}Note: Intel Mac users can run the Apple Silicon binary via Rosetta 2${NC}"
+            platform="darwin-aarch64"
+            ;;
+        *)
+            echo -e "${RED}Unsupported platform: ${platform}${NC}"
+            echo "Supported platforms: darwin-aarch64 (macOS Apple Silicon), linux-x86_64, windows-x86_64"
+            exit 1
+            ;;
+    esac
+
+    echo "$platform"
 }
 
 # Get latest release tag

@@ -18,15 +18,12 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: linux-x86_64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: linux-aarch64
-          - target: x86_64-apple-darwin
-            os: macos-13
-            name: darwin-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
             name: darwin-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -36,25 +33,33 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare artifact
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
         run: |
           cp target/${{ matrix.target }}/release/embedded-postgres embedded-postgres-${{ matrix.name }}
           chmod +x embedded-postgres-${{ matrix.name }}
 
-      - name: Upload artifact
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          copy target\${{ matrix.target }}\release\embedded-postgres.exe embedded-postgres-${{ matrix.name }}.exe
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.name }}
           path: embedded-postgres-${{ matrix.name }}
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.name }}
+          path: embedded-postgres-${{ matrix.name }}.exe
 
   build-postgres-bundle:
     name: Bundle PostgreSQL ${{ matrix.name }}
@@ -62,30 +67,30 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-13
-            name: darwin-x86_64
-            pg_target: x86_64-apple-darwin
           - os: macos-latest
             name: darwin-aarch64
             pg_target: aarch64-apple-darwin
           - os: ubuntu-latest
             name: linux-x86_64
             pg_target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            name: linux-aarch64
-            pg_target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            name: windows-x86_64
+            pg_target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Load versions
         id: versions
+        shell: bash
         run: |
           source versions.env
           echo "PG_VERSION=$PG_VERSION" >> $GITHUB_OUTPUT
           echo "PGVECTOR_VERSION=$PGVECTOR_VERSION" >> $GITHUB_OUTPUT
+          echo "PGVECTOR_COMPILED_TAG=$PGVECTOR_COMPILED_TAG" >> $GITHUB_OUTPUT
 
       - name: Download PostgreSQL
+        shell: bash
         run: |
           mkdir -p bundle
           PG_URL="https://github.com/theseus-rs/postgresql-binaries/releases/download/${{ steps.versions.outputs.PG_VERSION }}/postgresql-${{ steps.versions.outputs.PG_VERSION }}-${{ matrix.pg_target }}.tar.gz"
@@ -95,34 +100,34 @@ jobs:
           rm postgresql.tar.gz
 
       - name: Download pgvector
+        shell: bash
         run: |
           PG_VERSION="${{ steps.versions.outputs.PG_VERSION }}"
-          PGVECTOR_VERSION="${{ steps.versions.outputs.PGVECTOR_VERSION }}"
+          PGVECTOR_COMPILED_TAG="${{ steps.versions.outputs.PGVECTOR_COMPILED_TAG }}"
           PG_MAJOR=$(echo "$PG_VERSION" | cut -d. -f1)
-          PGVECTOR_URL="https://github.com/pgvector/pgvector/releases/download/v${PGVECTOR_VERSION}/pgvector-v${PGVECTOR_VERSION}-pg${PG_MAJOR}-${{ matrix.pg_target }}.tar.gz"
+          PGVECTOR_URL="https://github.com/portalcorp/pgvector_compiled/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${{ matrix.pg_target }}-pg${PG_MAJOR}.tar.gz"
           echo "Downloading pgvector from $PGVECTOR_URL"
 
-          if curl -fsSL "$PGVECTOR_URL" -o pgvector.tar.gz 2>/dev/null; then
-            mkdir -p pgvector_extract
-            tar -xzf pgvector.tar.gz -C pgvector_extract
-            rm pgvector.tar.gz
+          curl -fsSL "$PGVECTOR_URL" -o pgvector.tar.gz
+          mkdir -p pgvector_extract
+          tar -xzf pgvector.tar.gz -C pgvector_extract
+          rm pgvector.tar.gz
 
-            # Find PostgreSQL directory in bundle
-            PG_DIR=$(find bundle -maxdepth 1 -type d | tail -1)
+          # Find PostgreSQL directory in bundle
+          PG_DIR=$(find bundle -maxdepth 1 -type d | tail -1)
 
-            # Copy pgvector files
-            find pgvector_extract -name "*.so" -exec cp {} "$PG_DIR/lib/" \; 2>/dev/null || true
-            find pgvector_extract -name "*.dylib" -exec cp {} "$PG_DIR/lib/" \; 2>/dev/null || true
-            find pgvector_extract -name "vector.control" -exec cp {} "$PG_DIR/share/extension/" \; 2>/dev/null || true
-            find pgvector_extract -name "vector--*.sql" -exec cp {} "$PG_DIR/share/extension/" \; 2>/dev/null || true
+          # Copy pgvector files
+          find pgvector_extract -name "*.so" -exec cp {} "$PG_DIR/lib/" \; 2>/dev/null || true
+          find pgvector_extract -name "*.dylib" -exec cp {} "$PG_DIR/lib/" \; 2>/dev/null || true
+          find pgvector_extract -name "*.dll" -exec cp {} "$PG_DIR/lib/" \; 2>/dev/null || true
+          find pgvector_extract -name "vector.control" -exec cp {} "$PG_DIR/share/extension/" \; 2>/dev/null || true
+          find pgvector_extract -name "vector--*.sql" -exec cp {} "$PG_DIR/share/extension/" \; 2>/dev/null || true
 
-            rm -rf pgvector_extract
-            echo "pgvector installed"
-          else
-            echo "Warning: pgvector not available for this platform"
-          fi
+          rm -rf pgvector_extract
+          echo "pgvector installed"
 
       - name: Create bundle archive
+        shell: bash
         run: |
           PG_VERSION="${{ steps.versions.outputs.PG_VERSION }}"
           cd bundle
@@ -170,15 +175,14 @@ jobs:
             ### CLI Binaries
             Download the CLI for your platform:
             - `embedded-postgres-darwin-aarch64` - macOS Apple Silicon
-            - `embedded-postgres-darwin-x86_64` - macOS Intel
             - `embedded-postgres-linux-x86_64` - Linux x86_64
-            - `embedded-postgres-linux-aarch64` - Linux ARM64
+            - `embedded-postgres-windows-x86_64.exe` - Windows x64
 
             ### PostgreSQL Bundles (with pgvector)
             These are automatically downloaded by the CLI on first run:
             - PostgreSQL ${{ steps.versions.outputs.PG_VERSION }} with pgvector ${{ steps.versions.outputs.PGVECTOR_VERSION }}
 
-            ### Installation
+            ### Installation (macOS/Linux)
             ```bash
             curl -fsSL https://raw.githubusercontent.com/vectorize-io/embedded-pg-cli/main/install.sh | bash
             ```

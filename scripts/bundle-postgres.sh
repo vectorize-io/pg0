@@ -11,13 +11,13 @@ source "$SCRIPT_DIR/../versions.env"
 
 PG_VERSION="${PG_VERSION}"
 PGVECTOR_VERSION="${PGVECTOR_VERSION}"
+PGVECTOR_COMPILED_TAG="${PGVECTOR_COMPILED_TAG}"
 
-# Platforms to build for
+# Platforms to build for (only those with pgvector pre-compiled binaries available)
 PLATFORMS=(
     "aarch64-apple-darwin"
-    "x86_64-apple-darwin"
     "x86_64-unknown-linux-gnu"
-    "aarch64-unknown-linux-gnu"
+    "x86_64-pc-windows-msvc"
 )
 
 BUILD_DIR="${SCRIPT_DIR}/../target/bundles"
@@ -56,41 +56,20 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         PG_DIR="$WORK_DIR"
     fi
 
-    # Download pgvector from portal-corp (pre-compiled)
-    # Map platform names
-    case "$PLATFORM" in
-        "aarch64-apple-darwin")
-            PGVECTOR_PLATFORM="aarch64-apple-darwin"
-            ;;
-        "x86_64-apple-darwin")
-            PGVECTOR_PLATFORM="x86_64-apple-darwin"
-            ;;
-        "x86_64-unknown-linux-gnu")
-            PGVECTOR_PLATFORM="x86_64-unknown-linux-gnu"
-            ;;
-        "aarch64-unknown-linux-gnu")
-            PGVECTOR_PLATFORM="aarch64-unknown-linux-gnu"
-            ;;
-        *)
-            echo "Unknown platform: $PLATFORM"
-            continue
-            ;;
-    esac
-
-    # Try to download pgvector
-    # pgvector releases use format like: pgvector-v0.8.0-pg16-aarch64-apple-darwin.tar.gz
+    # Download pgvector from portalcorp (pre-compiled)
+    # URL format: pgvector-{platform}-pg{major}.tar.gz
     PG_MAJOR=$(echo "$PG_VERSION" | cut -d. -f1)
-    PGVECTOR_URL="https://github.com/pgvector/pgvector/releases/download/v${PGVECTOR_VERSION}/pgvector-v${PGVECTOR_VERSION}-pg${PG_MAJOR}-${PGVECTOR_PLATFORM}.tar.gz"
+    PGVECTOR_URL="https://github.com/portalcorp/pgvector_compiled/releases/download/${PGVECTOR_COMPILED_TAG}/pgvector-${PLATFORM}-pg${PG_MAJOR}.tar.gz"
 
     echo "Downloading pgvector from $PGVECTOR_URL"
-    if curl -fsSL "$PGVECTOR_URL" -o "$WORK_DIR/pgvector.tar.gz" 2>/dev/null; then
+    if curl -fsSL "$PGVECTOR_URL" -o "$WORK_DIR/pgvector.tar.gz"; then
         echo "Extracting pgvector..."
         mkdir -p "$WORK_DIR/pgvector"
         tar -xzf "$WORK_DIR/pgvector.tar.gz" -C "$WORK_DIR/pgvector"
         rm "$WORK_DIR/pgvector.tar.gz"
 
         # Copy pgvector files to PostgreSQL installation
-        # pgvector installs: lib/vector.so (or .dylib), share/extension/vector.*
+        # pgvector installs: lib/vector.so (or .dylib or .dll), share/extension/vector.*
         if [ -d "$WORK_DIR/pgvector/lib" ]; then
             cp -r "$WORK_DIR/pgvector/lib/"* "$PG_DIR/lib/" 2>/dev/null || true
         fi
@@ -98,7 +77,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
             cp -r "$WORK_DIR/pgvector/share/"* "$PG_DIR/share/" 2>/dev/null || true
         fi
         # Sometimes it's in a subdirectory
-        find "$WORK_DIR/pgvector" -name "*.so" -o -name "*.dylib" | while read f; do
+        find "$WORK_DIR/pgvector" \( -name "*.so" -o -name "*.dylib" -o -name "*.dll" \) | while read f; do
             cp "$f" "$PG_DIR/lib/" 2>/dev/null || true
         done
         find "$WORK_DIR/pgvector" -name "vector.control" | while read f; do
@@ -111,8 +90,8 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         rm -rf "$WORK_DIR/pgvector"
         echo "pgvector installed successfully"
     else
-        echo "Warning: Could not download pre-compiled pgvector for $PLATFORM"
-        echo "The bundle will be created without pgvector"
+        echo "ERROR: Could not download pgvector for $PLATFORM"
+        exit 1
     fi
 
     # Create the bundle archive
