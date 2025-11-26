@@ -43,10 +43,16 @@ struct Cli {
     command: Commands,
 }
 
+const DEFAULT_INSTANCE_NAME: &str = "default";
+
 #[derive(Subcommand)]
 enum Commands {
     /// Start PostgreSQL server
     Start {
+        /// Instance name (allows running multiple instances)
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+
         /// Port to listen on
         #[arg(short, long, default_value = "5432")]
         port: u16,
@@ -55,9 +61,9 @@ enum Commands {
         #[arg(short = 'V', long, default_value = env!("PG_VERSION"))]
         version: String,
 
-        /// Data directory
-        #[arg(short, long, default_value = "~/.pg0/data")]
-        data_dir: String,
+        /// Data directory (defaults to ~/.pg0/instances/<name>/data)
+        #[arg(short, long)]
+        data_dir: Option<String>,
 
         /// Username for the database
         #[arg(short, long, default_value = "postgres")]
@@ -72,23 +78,45 @@ enum Commands {
         database: String,
     },
     /// Stop PostgreSQL server
-    Stop,
+    Stop {
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+    },
     /// Show PostgreSQL server info (status, connection URI, etc.)
     Info {
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+
+        /// Output format
+        #[arg(short, long, default_value = "text")]
+        output: OutputFormat,
+    },
+    /// List all instances
+    List {
         /// Output format
         #[arg(short, long, default_value = "text")]
         output: OutputFormat,
     },
     /// Open psql shell connected to the running instance
     Psql {
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+
         /// Additional arguments to pass to psql
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
     /// Install a PostgreSQL extension (e.g., pgvector)
     InstallExtension {
-        /// Extension name (e.g., "vector", "postgis")
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
         name: String,
+
+        /// Extension name (e.g., "vector", "postgis")
+        extension: String,
     },
     /// List available extensions
     ListExtensions,
@@ -115,6 +143,7 @@ struct InstanceInfo {
 
 #[derive(Serialize)]
 struct InfoOutput {
+    name: String,
     running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pid: Option<u32>,
@@ -132,18 +161,26 @@ struct InfoOutput {
     uri: Option<String>,
 }
 
-fn get_state_dir() -> Result<PathBuf, CliError> {
+fn get_base_dir() -> Result<PathBuf, CliError> {
     dirs::home_dir()
         .map(|h| h.join(".pg0"))
         .ok_or(CliError::NoDataDir)
 }
 
-fn get_state_file() -> Result<PathBuf, CliError> {
-    Ok(get_state_dir()?.join("instance.json"))
+fn get_instances_dir() -> Result<PathBuf, CliError> {
+    Ok(get_base_dir()?.join("instances"))
 }
 
-fn load_instance() -> Result<Option<InstanceInfo>, CliError> {
-    let state_file = get_state_file()?;
+fn get_instance_dir(name: &str) -> Result<PathBuf, CliError> {
+    Ok(get_instances_dir()?.join(name))
+}
+
+fn get_state_file(name: &str) -> Result<PathBuf, CliError> {
+    Ok(get_instance_dir(name)?.join("instance.json"))
+}
+
+fn load_instance(name: &str) -> Result<Option<InstanceInfo>, CliError> {
+    let state_file = get_state_file(name)?;
     if state_file.exists() {
         let content = fs::read_to_string(&state_file)?;
         Ok(Some(serde_json::from_str(&content)?))
@@ -152,20 +189,42 @@ fn load_instance() -> Result<Option<InstanceInfo>, CliError> {
     }
 }
 
-fn save_instance(info: &InstanceInfo) -> Result<(), CliError> {
-    let state_dir = get_state_dir()?;
-    fs::create_dir_all(&state_dir)?;
-    let state_file = get_state_file()?;
+fn save_instance(name: &str, info: &InstanceInfo) -> Result<(), CliError> {
+    let instance_dir = get_instance_dir(name)?;
+    fs::create_dir_all(&instance_dir)?;
+    let state_file = get_state_file(name)?;
     fs::write(&state_file, serde_json::to_string_pretty(info)?)?;
     Ok(())
 }
 
-fn remove_instance() -> Result<(), CliError> {
-    let state_file = get_state_file()?;
+fn remove_instance(name: &str) -> Result<(), CliError> {
+    let state_file = get_state_file(name)?;
     if state_file.exists() {
         fs::remove_file(&state_file)?;
     }
     Ok(())
+}
+
+fn list_instances() -> Result<Vec<String>, CliError> {
+    let instances_dir = get_instances_dir()?;
+    if !instances_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&instances_dir)? {
+        let entry = entry?;
+        if entry.path().is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                // Check if it has an instance.json file
+                if entry.path().join("instance.json").exists() {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 fn is_process_running(pid: u32) -> bool {
@@ -336,25 +395,33 @@ fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), 
 }
 
 fn start(
+    name: String,
     port: u16,
     version: String,
-    data_dir: String,
+    data_dir: Option<String>,
     username: String,
     password: String,
     database: String,
 ) -> Result<(), CliError> {
     // Check if already running
-    if let Some(info) = load_instance()? {
+    if let Some(info) = load_instance(&name)? {
         if is_process_running(info.pid) {
             return Err(CliError::AlreadyRunning(info.pid));
         }
         // Stale instance, clean up
-        remove_instance()?;
+        remove_instance(&name)?;
     }
 
-    let state_dir = get_state_dir()?;
-    let data_dir = expand_path(&data_dir);
-    let installation_dir = state_dir.join("installation");
+    let base_dir = get_base_dir()?;
+    let instance_dir = get_instance_dir(&name)?;
+
+    // Use provided data_dir or default to instance-specific directory
+    let data_dir = match data_dir {
+        Some(dir) => expand_path(&dir),
+        None => instance_dir.join("data"),
+    };
+
+    let installation_dir = base_dir.join("installation");
 
     fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&installation_dir)?;
@@ -447,10 +514,11 @@ fn start(
         version: version.clone(),
     };
 
-    save_instance(&info)?;
+    save_instance(&name, &info)?;
 
     println!();
     println!("PostgreSQL is running!");
+    println!("  Instance: {}", name);
     println!("  PID:      {}", pid);
     println!("  Port:     {}", port);
     println!("  Username: {}", username);
@@ -463,7 +531,11 @@ fn start(
         username, password, port, database
     );
     println!();
-    println!("Use 'pg0 stop' to stop the server.");
+    if name == DEFAULT_INSTANCE_NAME {
+        println!("Use 'pg0 stop' to stop the server.");
+    } else {
+        println!("Use 'pg0 stop --name {}' to stop the server.", name);
+    }
 
     // Detach - let the process continue running
     std::mem::forget(postgresql);
@@ -471,16 +543,16 @@ fn start(
     Ok(())
 }
 
-fn stop() -> Result<(), CliError> {
-    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+fn stop(name: String) -> Result<(), CliError> {
+    let info = load_instance(&name)?.ok_or(CliError::NoInstance)?;
 
     if !is_process_running(info.pid) {
-        println!("PostgreSQL is not running (stale state detected).");
-        remove_instance()?;
+        println!("PostgreSQL instance '{}' is not running (stale state detected).", name);
+        remove_instance(&name)?;
         return Ok(());
     }
 
-    println!("Stopping PostgreSQL (pid: {})...", info.pid);
+    println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
 
     // Send SIGTERM to gracefully stop
     #[cfg(unix)]
@@ -519,19 +591,19 @@ fn stop() -> Result<(), CliError> {
         }
     }
 
-    remove_instance()?;
-    println!("PostgreSQL stopped.");
+    remove_instance(&name)?;
+    println!("PostgreSQL instance '{}' stopped.", name);
 
     Ok(())
 }
 
-fn info(output_format: OutputFormat) -> Result<(), CliError> {
-    let instance = match load_instance()? {
+fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
+    let instance = match load_instance(&name)? {
         Some(info) => {
             if is_process_running(info.pid) {
                 Some(info)
             } else {
-                remove_instance()?;
+                remove_instance(&name)?;
                 None
             }
         }
@@ -544,6 +616,7 @@ fn info(output_format: OutputFormat) -> Result<(), CliError> {
             info.username, info.password, info.port, info.database
         );
         InfoOutput {
+            name: name.clone(),
             running: true,
             pid: Some(info.pid),
             port: Some(info.port),
@@ -555,6 +628,7 @@ fn info(output_format: OutputFormat) -> Result<(), CliError> {
         }
     } else {
         InfoOutput {
+            name: name.clone(),
             running: false,
             pid: None,
             port: None,
@@ -572,7 +646,7 @@ fn info(output_format: OutputFormat) -> Result<(), CliError> {
         }
         OutputFormat::Text => {
             if output.running {
-                println!("PostgreSQL is running");
+                println!("PostgreSQL instance '{}' is running", name);
                 println!("  PID:      {}", output.pid.unwrap());
                 println!("  Port:     {}", output.port.unwrap());
                 println!("  Version:  {}", output.version.as_ref().unwrap());
@@ -582,7 +656,7 @@ fn info(output_format: OutputFormat) -> Result<(), CliError> {
                 println!();
                 println!("URI: {}", output.uri.as_ref().unwrap());
             } else {
-                println!("PostgreSQL is not running");
+                println!("PostgreSQL instance '{}' is not running", name);
             }
         }
     }
@@ -616,11 +690,11 @@ fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
     )))
 }
 
-fn psql(args: Vec<String>) -> Result<(), CliError> {
-    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
+    let info = load_instance(&name)?.ok_or(CliError::NoInstance)?;
 
     if !is_process_running(info.pid) {
-        remove_instance()?;
+        remove_instance(&name)?;
         return Err(CliError::NoInstance);
     }
 
@@ -664,11 +738,11 @@ fn find_installed_version(installation_dir: &PathBuf) -> Result<String, CliError
     )))
 }
 
-fn install_extension(name: String) -> Result<(), CliError> {
-    let info = load_instance()?.ok_or(CliError::NoInstance)?;
+fn install_extension(instance_name: String, extension_name: String) -> Result<(), CliError> {
+    let info = load_instance(&instance_name)?.ok_or(CliError::NoInstance)?;
 
     if !is_process_running(info.pid) {
-        remove_instance()?;
+        remove_instance(&instance_name)?;
         return Err(CliError::NoInstance);
     }
 
@@ -679,8 +753,8 @@ fn install_extension(name: String) -> Result<(), CliError> {
     // Find the extension (case-insensitive search)
     let ext = available
         .iter()
-        .find(|e| e.name().to_lowercase() == name.to_lowercase())
-        .ok_or_else(|| CliError::ExtensionNotFound(name.clone()))?;
+        .find(|e| e.name().to_lowercase() == extension_name.to_lowercase())
+        .ok_or_else(|| CliError::ExtensionNotFound(extension_name.clone()))?;
 
     let ext_name = ext.name().to_string();
     let ext_namespace = ext.namespace().to_string();
@@ -723,6 +797,86 @@ fn install_extension(name: String) -> Result<(), CliError> {
     Ok(())
 }
 
+fn list(output_format: OutputFormat) -> Result<(), CliError> {
+    let instance_names = list_instances()?;
+
+    let mut instances: Vec<InfoOutput> = Vec::new();
+    for name in &instance_names {
+        let info = match load_instance(name)? {
+            Some(info) => {
+                if is_process_running(info.pid) {
+                    Some(info)
+                } else {
+                    remove_instance(name)?;
+                    None
+                }
+            }
+            None => None,
+        };
+
+        let output = if let Some(info) = info {
+            let uri = format!(
+                "postgresql://{}:{}@localhost:{}/{}",
+                info.username, info.password, info.port, info.database
+            );
+            InfoOutput {
+                name: name.clone(),
+                running: true,
+                pid: Some(info.pid),
+                port: Some(info.port),
+                version: Some(info.version),
+                username: Some(info.username),
+                database: Some(info.database),
+                data_dir: Some(info.data_dir.display().to_string()),
+                uri: Some(uri),
+            }
+        } else {
+            InfoOutput {
+                name: name.clone(),
+                running: false,
+                pid: None,
+                port: None,
+                version: None,
+                username: None,
+                database: None,
+                data_dir: None,
+                uri: None,
+            }
+        };
+        instances.push(output);
+    }
+
+    match output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&instances)?);
+        }
+        OutputFormat::Text => {
+            if instances.is_empty() {
+                println!("No instances found.");
+            } else {
+                println!("Instances:");
+                println!();
+                for instance in &instances {
+                    let status = if instance.running { "running" } else { "stopped" };
+                    if instance.running {
+                        println!(
+                            "  {} ({}) - port {} - {}",
+                            instance.name,
+                            status,
+                            instance.port.unwrap(),
+                            instance.uri.as_ref().unwrap()
+                        );
+                    } else {
+                        println!("  {} ({})", instance.name, status);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn list_extensions() -> Result<(), CliError> {
     println!("Fetching available extensions...");
 
@@ -759,17 +913,19 @@ fn main() {
 
     let result = match cli.command {
         Commands::Start {
+            name,
             port,
             version,
             data_dir,
             username,
             password,
             database,
-        } => start(port, version, data_dir, username, password, database),
-        Commands::Stop => stop(),
-        Commands::Info { output } => info(output),
-        Commands::Psql { args } => psql(args),
-        Commands::InstallExtension { name } => install_extension(name),
+        } => start(name, port, version, data_dir, username, password, database),
+        Commands::Stop { name } => stop(name),
+        Commands::Info { name, output } => info(name, output),
+        Commands::List { output } => list(output),
+        Commands::Psql { name, args } => psql(name, args),
+        Commands::InstallExtension { name, extension } => install_extension(name, extension),
         Commands::ListExtensions => list_extensions(),
     };
 
