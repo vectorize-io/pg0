@@ -9,7 +9,7 @@ Includes **pgvector** for AI/vector workloads out of the box.
 - **Zero dependencies** - single binary, no installation required
 - **Embedded PostgreSQL 16** with pgvector pre-installed
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
-- Works on macOS (Apple Silicon), Linux (x86_64), and Windows (x64)
+- Works on macOS (Apple Silicon), Linux (x86_64, statically linked), and Windows (x64)
 - Bundled `psql` client - no separate installation needed
 - Data persists between restarts
 
@@ -45,6 +45,17 @@ pg0 stop
 
 ## Usage
 
+### Commands
+
+pg0 provides the following commands:
+
+1. **start** - Start a PostgreSQL server instance
+2. **stop** - Stop a running PostgreSQL server instance
+3. **drop** - Stop and permanently delete an instance (removes all data)
+4. **info** - Display instance information (status, connection URI, etc.)
+5. **list** - List all PostgreSQL instances
+6. **psql** - Open an interactive psql shell connected to an instance
+
 ### Start PostgreSQL
 
 ```bash
@@ -60,6 +71,20 @@ pg0 start --port 5433 --username myuser --password mypass --database myapp
 ```bash
 pg0 stop
 ```
+
+### Drop Instance
+
+Permanently delete an instance and all its data:
+
+```bash
+# Drop the default instance
+pg0 drop
+
+# Drop a named instance
+pg0 drop --name myapp
+```
+
+**Warning:** This command will stop the instance if running and delete all data. This action cannot be undone.
 
 ### Get Server Info
 
