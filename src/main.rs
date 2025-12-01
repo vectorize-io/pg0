@@ -89,6 +89,16 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
         name: String,
     },
+    /// Drop an instance (stop if running, delete all data)
+    Drop {
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Show PostgreSQL server info (status, connection URI, etc.)
     Info {
         /// Instance name
@@ -574,8 +584,7 @@ fn stop(name: String) -> Result<(), CliError> {
     let info = load_instance(&name)?.ok_or(CliError::NoInstance)?;
 
     if !is_process_running(info.pid) {
-        println!("PostgreSQL instance '{}' is not running (stale state detected).", name);
-        remove_instance(&name)?;
+        println!("PostgreSQL instance '{}' is not running.", name);
         return Ok(());
     }
 
@@ -618,52 +627,141 @@ fn stop(name: String) -> Result<(), CliError> {
         }
     }
 
-    remove_instance(&name)?;
     println!("PostgreSQL instance '{}' stopped.", name);
 
     Ok(())
 }
 
-fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
-    let instance = match load_instance(&name)? {
-        Some(info) => {
-            if is_process_running(info.pid) {
-                Some(info)
-            } else {
-                remove_instance(&name)?;
-                None
+fn drop_instance(name: String, force: bool) -> Result<(), CliError> {
+    let instance = load_instance(&name)?;
+
+    if instance.is_none() {
+        println!("Instance '{}' does not exist.", name);
+        return Ok(());
+    }
+
+    let info = instance.unwrap();
+
+    // Confirmation prompt unless --force
+    if !force {
+        println!("This will permanently delete instance '{}' and all its data:", name);
+        println!("  Data dir: {}", info.data_dir.display());
+        println!();
+        print!("Are you sure? [y/N] ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Stop if running
+    if is_process_running(info.pid) {
+        println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            let _ = Command::new("kill")
+                .args(["-TERM", &info.pid.to_string()])
+                .output();
+        }
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let _ = Command::new("taskkill")
+                .args(["/PID", &info.pid.to_string()])
+                .output();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        if is_process_running(info.pid) {
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                let _ = Command::new("kill")
+                    .args(["-9", &info.pid.to_string()])
+                    .output();
+            }
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &info.pid.to_string()])
+                    .output();
             }
         }
-        None => None,
-    };
+    }
 
-    let output = if let Some(info) = instance {
-        let uri = format!(
-            "postgresql://{}:{}@localhost:{}/{}",
-            info.username, info.password, info.port, info.database
-        );
-        InfoOutput {
-            name: name.clone(),
-            running: true,
-            pid: Some(info.pid),
-            port: Some(info.port),
-            version: Some(info.version),
-            username: Some(info.username),
-            database: Some(info.database),
-            data_dir: Some(info.data_dir.display().to_string()),
-            uri: Some(uri),
+    // Delete data directory
+    if info.data_dir.exists() {
+        println!("Deleting data directory: {}", info.data_dir.display());
+        fs::remove_dir_all(&info.data_dir)?;
+    }
+
+    // Delete instance directory (contains instance.json)
+    let instance_dir = get_instance_dir(&name)?;
+    if instance_dir.exists() {
+        fs::remove_dir_all(&instance_dir)?;
+    }
+
+    println!("Instance '{}' dropped.", name);
+
+    Ok(())
+}
+
+fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
+    let instance = load_instance(&name)?;
+
+    let output = match instance {
+        Some(info) => {
+            let running = is_process_running(info.pid);
+            if running {
+                let uri = format!(
+                    "postgresql://{}:{}@localhost:{}/{}",
+                    info.username, info.password, info.port, info.database
+                );
+                InfoOutput {
+                    name: name.clone(),
+                    running: true,
+                    pid: Some(info.pid),
+                    port: Some(info.port),
+                    version: Some(info.version),
+                    username: Some(info.username),
+                    database: Some(info.database),
+                    data_dir: Some(info.data_dir.display().to_string()),
+                    uri: Some(uri),
+                }
+            } else {
+                // Stopped but instance exists - show data_dir
+                InfoOutput {
+                    name: name.clone(),
+                    running: false,
+                    pid: None,
+                    port: Some(info.port),
+                    version: Some(info.version),
+                    username: Some(info.username),
+                    database: Some(info.database),
+                    data_dir: Some(info.data_dir.display().to_string()),
+                    uri: None,
+                }
+            }
         }
-    } else {
-        InfoOutput {
-            name: name.clone(),
-            running: false,
-            pid: None,
-            port: None,
-            version: None,
-            username: None,
-            database: None,
-            data_dir: None,
-            uri: None,
+        None => {
+            // Instance doesn't exist
+            InfoOutput {
+                name: name.clone(),
+                running: false,
+                pid: None,
+                port: None,
+                version: None,
+                username: None,
+                database: None,
+                data_dir: None,
+                uri: None,
+            }
         }
     };
 
@@ -682,8 +780,17 @@ fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
                 println!("  Data dir: {}", output.data_dir.as_ref().unwrap());
                 println!();
                 println!("URI: {}", output.uri.as_ref().unwrap());
+            } else if output.data_dir.is_some() {
+                println!("PostgreSQL instance '{}' is stopped", name);
+                println!("  Port:     {}", output.port.unwrap());
+                println!("  Version:  {}", output.version.as_ref().unwrap());
+                println!("  Username: {}", output.username.as_ref().unwrap());
+                println!("  Database: {}", output.database.as_ref().unwrap());
+                println!("  Data dir: {}", output.data_dir.as_ref().unwrap());
+                println!();
+                println!("Use 'pg0 start --name {}' to start it.", name);
             } else {
-                println!("PostgreSQL instance '{}' is not running", name);
+                println!("PostgreSQL instance '{}' does not exist", name);
             }
         }
     }
@@ -829,48 +936,39 @@ fn list(output_format: OutputFormat) -> Result<(), CliError> {
 
     let mut instances: Vec<InfoOutput> = Vec::new();
     for name in &instance_names {
-        let info = match load_instance(name)? {
-            Some(info) => {
-                if is_process_running(info.pid) {
-                    Some(info)
-                } else {
-                    remove_instance(name)?;
-                    None
+        if let Some(info) = load_instance(name)? {
+            let running = is_process_running(info.pid);
+            let output = if running {
+                let uri = format!(
+                    "postgresql://{}:{}@localhost:{}/{}",
+                    info.username, info.password, info.port, info.database
+                );
+                InfoOutput {
+                    name: name.clone(),
+                    running: true,
+                    pid: Some(info.pid),
+                    port: Some(info.port),
+                    version: Some(info.version),
+                    username: Some(info.username),
+                    database: Some(info.database),
+                    data_dir: Some(info.data_dir.display().to_string()),
+                    uri: Some(uri),
                 }
-            }
-            None => None,
-        };
-
-        let output = if let Some(info) = info {
-            let uri = format!(
-                "postgresql://{}:{}@localhost:{}/{}",
-                info.username, info.password, info.port, info.database
-            );
-            InfoOutput {
-                name: name.clone(),
-                running: true,
-                pid: Some(info.pid),
-                port: Some(info.port),
-                version: Some(info.version),
-                username: Some(info.username),
-                database: Some(info.database),
-                data_dir: Some(info.data_dir.display().to_string()),
-                uri: Some(uri),
-            }
-        } else {
-            InfoOutput {
-                name: name.clone(),
-                running: false,
-                pid: None,
-                port: None,
-                version: None,
-                username: None,
-                database: None,
-                data_dir: None,
-                uri: None,
-            }
-        };
-        instances.push(output);
+            } else {
+                InfoOutput {
+                    name: name.clone(),
+                    running: false,
+                    pid: None,
+                    port: Some(info.port),
+                    version: Some(info.version),
+                    username: Some(info.username),
+                    database: Some(info.database),
+                    data_dir: Some(info.data_dir.display().to_string()),
+                    uri: None,
+                }
+            };
+            instances.push(output);
+        }
     }
 
     match output_format {
@@ -894,7 +992,13 @@ fn list(output_format: OutputFormat) -> Result<(), CliError> {
                             instance.uri.as_ref().unwrap()
                         );
                     } else {
-                        println!("  {} ({})", instance.name, status);
+                        println!(
+                            "  {} ({}) - port {} - {}",
+                            instance.name,
+                            status,
+                            instance.port.unwrap(),
+                            instance.data_dir.as_ref().unwrap()
+                        );
                     }
                 }
             }
@@ -950,6 +1054,7 @@ fn main() {
             config,
         } => start(name, port, version, data_dir, username, password, database, config),
         Commands::Stop { name } => stop(name),
+        Commands::Drop { name, force } => drop_instance(name, force),
         Commands::Info { name, output } => info(name, output),
         Commands::List { output } => list(output),
         Commands::Psql { name, args } => psql(name, args),

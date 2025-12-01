@@ -1,0 +1,37 @@
+name: Release Node.js
+
+on:
+  push:
+    tags:
+      - 'node-*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    name: Release Node.js Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        working-directory: sdk/node
+        run: npm ci
+
+      - name: Build
+        working-directory: sdk/node
+        run: npm run build
+
+      - name: Publish to npm
+        working-directory: sdk/node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

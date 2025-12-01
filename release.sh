@@ -5,34 +5,51 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Get current version from Cargo.toml
-CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-
-echo "Current version: $CURRENT_VERSION"
-echo ""
-
-# Check if version argument provided
-if [ -z "$1" ]; then
-    echo "Usage: ./release.sh <version>"
+show_usage() {
+    echo "Usage: ./release.sh <component> <version>"
+    echo ""
+    echo "Components:"
+    echo "  cli     - Rust CLI (tag: v*)"
+    echo "  py      - Python client (tag: py-*)"
+    echo "  node    - Node.js client (tag: node-*)"
+    echo ""
+    echo "Version:"
+    echo "  X.Y.Z   - Explicit version (e.g., 1.0.0)"
+    echo "  patch   - Bump patch version (0.1.0 -> 0.1.1)"
+    echo "  minor   - Bump minor version (0.1.0 -> 0.2.0)"
+    echo "  major   - Bump major version (0.1.0 -> 1.0.0)"
     echo ""
     echo "Examples:"
-    echo "  ./release.sh 0.1.0"
-    echo "  ./release.sh 1.0.0"
-    echo "  ./release.sh patch   # Bump patch version (0.1.0 -> 0.1.1)"
-    echo "  ./release.sh minor   # Bump minor version (0.1.0 -> 0.2.0)"
-    echo "  ./release.sh major   # Bump major version (0.1.0 -> 1.0.0)"
-    exit 1
-fi
+    echo "  ./release.sh cli 0.1.0"
+    echo "  ./release.sh cli patch"
+    echo "  ./release.sh py 0.1.0"
+    echo "  ./release.sh py minor"
+    echo "  ./release.sh node 1.0.0"
+    echo "  ./release.sh node patch"
+}
 
-VERSION=$1
+get_cli_version() {
+    grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/'
+}
 
-# Handle semantic version bumps
-if [ "$VERSION" = "patch" ] || [ "$VERSION" = "minor" ] || [ "$VERSION" = "major" ]; then
-    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+get_py_version() {
+    grep '^version = ' sdk/python/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/'
+}
 
-    case $VERSION in
+get_node_version() {
+    grep '"version"' sdk/node/package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/'
+}
+
+bump_version() {
+    local current=$1
+    local bump_type=$2
+
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$current"
+
+    case $bump_type in
         patch)
             PATCH=$((PATCH + 1))
             ;;
@@ -47,53 +64,171 @@ if [ "$VERSION" = "patch" ] || [ "$VERSION" = "minor" ] || [ "$VERSION" = "major
             ;;
     esac
 
-    VERSION="${MAJOR}.${MINOR}.${PATCH}"
-fi
+    echo "${MAJOR}.${MINOR}.${PATCH}"
+}
 
-# Validate semantic version format
-if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo -e "${RED}Error: Invalid version format '$VERSION'${NC}"
-    echo "Version must be in semantic format: X.Y.Z (e.g., 1.0.0)"
+validate_version() {
+    local version=$1
+    if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo -e "${RED}Error: Invalid version format '$version'${NC}"
+        echo "Version must be in semantic format: X.Y.Z (e.g., 1.0.0)"
+        exit 1
+    fi
+}
+
+check_clean_git() {
+    if ! git diff --quiet || ! git diff --staged --quiet; then
+        echo -e "${RED}Error: You have uncommitted changes. Please commit or stash them first.${NC}"
+        git status --short
+        exit 1
+    fi
+}
+
+check_tag_exists() {
+    local tag=$1
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        echo -e "${RED}Error: Tag $tag already exists${NC}"
+        exit 1
+    fi
+}
+
+release_cli() {
+    local version=$1
+    local current=$(get_cli_version)
+
+    echo -e "${BLUE}CLI Release${NC}"
+    echo "Current version: $current"
+
+    # Handle version bump
+    if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
+        version=$(bump_version "$current" "$version")
+    fi
+
+    validate_version "$version"
+    local tag="v$version"
+
+    check_clean_git
+    check_tag_exists "$tag"
+
+    echo -e "${YELLOW}Preparing CLI release $tag${NC}"
+
+    # Update version in Cargo.toml
+    echo "Updating Cargo.toml version to $version..."
+    sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml
+    rm -f Cargo.toml.bak
+
+    # Commit and tag
+    git add Cargo.toml
+    git commit -m "chore: bump CLI version to $version"
+    git tag -a "$tag" -m "CLI Release $version"
+
+    # Push
+    git push
+    git push origin "$tag"
+
+    echo -e "${GREEN}CLI release $tag pushed!${NC}"
+}
+
+release_py() {
+    local version=$1
+    local current=$(get_py_version)
+
+    echo -e "${BLUE}Python Release${NC}"
+    echo "Current version: $current"
+
+    # Handle version bump
+    if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
+        version=$(bump_version "$current" "$version")
+    fi
+
+    validate_version "$version"
+    local tag="py-$version"
+
+    check_clean_git
+    check_tag_exists "$tag"
+
+    echo -e "${YELLOW}Preparing Python release $tag${NC}"
+
+    # Update version in pyproject.toml
+    echo "Updating pyproject.toml version to $version..."
+    sed -i.bak "s/^version = \".*\"/version = \"$version\"/" sdk/python/pyproject.toml
+    rm -f sdk/python/pyproject.toml.bak
+
+    # Commit and tag
+    git add sdk/python/pyproject.toml
+    git commit -m "chore: bump Python client version to $version"
+    git tag -a "$tag" -m "Python Client Release $version"
+
+    # Push
+    git push
+    git push origin "$tag"
+
+    echo -e "${GREEN}Python release $tag pushed!${NC}"
+    echo "Package will be published to PyPI as: pg0-embedded"
+}
+
+release_node() {
+    local version=$1
+    local current=$(get_node_version)
+
+    echo -e "${BLUE}Node.js Release${NC}"
+    echo "Current version: $current"
+
+    # Handle version bump
+    if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
+        version=$(bump_version "$current" "$version")
+    fi
+
+    validate_version "$version"
+    local tag="node-$version"
+
+    check_clean_git
+    check_tag_exists "$tag"
+
+    echo -e "${YELLOW}Preparing Node.js release $tag${NC}"
+
+    # Update version in package.json
+    echo "Updating package.json version to $version..."
+    cd sdk/node
+    npm version "$version" --no-git-tag-version
+    cd ../..
+
+    # Commit and tag
+    git add sdk/node/package.json
+    git commit -m "chore: bump Node.js client version to $version"
+    git tag -a "$tag" -m "Node.js Client Release $version"
+
+    # Push
+    git push
+    git push origin "$tag"
+
+    echo -e "${GREEN}Node.js release $tag pushed!${NC}"
+    echo "Package will be published to npm as: @vectorize-io/pg0"
+}
+
+# Main
+if [ -z "$1" ] || [ -z "$2" ]; then
+    show_usage
     exit 1
 fi
 
-TAG="v$VERSION"
+COMPONENT=$1
+VERSION=$2
 
-echo -e "${YELLOW}Preparing release $TAG${NC}"
-echo ""
-
-# Check for uncommitted changes
-if ! git diff --quiet || ! git diff --staged --quiet; then
-    echo -e "${RED}Error: You have uncommitted changes. Please commit or stash them first.${NC}"
-    git status --short
-    exit 1
-fi
-
-# Check if tag already exists
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Tag $TAG already exists${NC}"
-    exit 1
-fi
-
-# Update version in Cargo.toml
-echo "Updating Cargo.toml version to $VERSION..."
-sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-rm -f Cargo.toml.bak
-
-# Commit the version bump
-echo "Committing version bump..."
-git add Cargo.toml
-git commit -m "chore: bump version to $VERSION"
-
-# Create tag
-echo "Creating tag $TAG..."
-git tag -a "$TAG" -m "Release $VERSION"
-
-# Push
-echo "Pushing to remote..."
-git push
-git push origin "$TAG"
-
-echo ""
-echo -e "${GREEN}Release $TAG pushed!${NC}"
-echo "GitHub Actions will now build and publish the release."
+case $COMPONENT in
+    cli)
+        release_cli "$VERSION"
+        ;;
+    py|python)
+        release_py "$VERSION"
+        ;;
+    node|nodejs)
+        release_node "$VERSION"
+        ;;
+    *)
+        echo -e "${RED}Error: Unknown component '$COMPONENT'${NC}"
+        echo ""
+        show_usage
+        exit 1
+        ;;
+esac

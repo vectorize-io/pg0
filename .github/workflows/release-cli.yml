@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-cli:
+    name: Build CLI ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: darwin-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/pg0 pg0-${{ matrix.name }}
+          chmod +x pg0-${{ matrix.name }}
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          copy target\${{ matrix.target }}\release\pg0.exe pg0-${{ matrix.name }}.exe
+
+      - name: Upload artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.name }}
+          path: pg0-${{ matrix.name }}
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.name }}
+          path: pg0-${{ matrix.name }}.exe
+
+  release:
+    needs: [build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load versions
+        id: versions
+        run: |
+          source versions.env
+          echo "PG_VERSION=$PG_VERSION" >> $GITHUB_OUTPUT
+          echo "PGVECTOR_VERSION=$PGVECTOR_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir release
+          find artifacts -type f -exec mv {} release/ \;
+          ls -la release/
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PG_VERSION: ${{ steps.versions.outputs.PG_VERSION }}
+          PGVECTOR_VERSION: ${{ steps.versions.outputs.PGVECTOR_VERSION }}
+        run: |
+          echo "## pg0 - Embedded PostgreSQL CLI" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### CLI Binaries" >> release_notes.md
+          echo "- \`pg0-darwin-aarch64\` - macOS Apple Silicon" >> release_notes.md
+          echo "- \`pg0-linux-x86_64\` - Linux x86_64" >> release_notes.md
+          echo "- \`pg0-windows-x86_64.exe\` - Windows x64" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Bundled Components" >> release_notes.md
+          echo "On first run, the CLI automatically downloads:" >> release_notes.md
+          echo "- PostgreSQL ${PG_VERSION} (from theseus-rs)" >> release_notes.md
+          echo "- pgvector ${PGVECTOR_VERSION}" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Installation (macOS/Linux)" >> release_notes.md
+          echo "\`\`\`bash" >> release_notes.md
+          echo "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash" >> release_notes.md
+          echo "\`\`\`" >> release_notes.md
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md release/*
