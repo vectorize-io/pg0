@@ -53,6 +53,11 @@ jobs:
         run: |
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
+      - name: Configure static linking (Linux musl)
+        if: contains(matrix.target, 'linux-musl')
+        run: |
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
