@@ -9,11 +9,14 @@ Includes **pgvector** for AI/vector workloads out of the box.
 - **Zero dependencies** - single binary, no installation required
 - **Embedded PostgreSQL 16** with pgvector pre-installed
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
-- Works on macOS (Apple Silicon), Linux (x86_64 & ARM64, statically linked), and Windows (x64)
+- Works on macOS (Apple Silicon), Linux (x86_64 & ARM64), and Windows (x64)
 - Bundled `psql` client - no separate installation needed
 - Data persists between restarts
+- **Smart binary selection** - automatically downloads the right binary for your Linux distribution (Debian/Ubuntu vs Alpine)
 
 ## Installation
+
+The install script automatically detects your platform and downloads the correct binary:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash
@@ -24,6 +27,15 @@ Or with a custom install directory:
 ```bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash
 ```
+
+### Linux Distributions
+
+pg0 provides separate binaries optimized for different Linux distributions:
+
+- **Debian/Ubuntu/RHEL** (glibc-based): Uses `pg0-linux-{arch}-gnu`
+- **Alpine** (musl-based): Uses `pg0-linux-{arch}-musl`
+
+The install script automatically detects your distribution and downloads the correct binary.
 
 ## Quick Start
 

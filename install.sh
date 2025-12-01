@@ -13,7 +13,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Detect OS and architecture
 detect_platform() {
-    local os arch platform
+    local os arch libc platform
 
     case "$(uname -s)" in
         Linux*)     os="linux";;
@@ -28,11 +28,23 @@ detect_platform() {
         *)              echo -e "${RED}Unsupported architecture: $(uname -m)${NC}"; exit 1;;
     esac
 
-    platform="${os}-${arch}"
+    # Detect libc for Linux (musl vs glibc)
+    if [ "$os" = "linux" ]; then
+        if [ -f "/lib/ld-musl-${arch}.so.1" ] || [ -f "/lib/ld-musl-x86_64.so.1" ] || [ -f "/lib/ld-musl-aarch64.so.1" ]; then
+            # Running on Alpine/musl
+            libc="musl"
+        else
+            # Running on Debian/Ubuntu/etc with glibc
+            libc="gnu"
+        fi
+        platform="${os}-${arch}-${libc}"
+    else
+        platform="${os}-${arch}"
+    fi
 
-    # Validate supported platforms (must have pgvector pre-compiled)
+    # Validate supported platforms
     case "$platform" in
-        darwin-aarch64|linux-x86_64|linux-aarch64|windows-x86_64)
+        darwin-aarch64|linux-x86_64-gnu|linux-x86_64-musl|linux-aarch64-gnu|linux-aarch64-musl|windows-x86_64)
             ;;
         darwin-x86_64)
             echo -e "${YELLOW}Note: Intel Mac users can run the Apple Silicon binary via Rosetta 2${NC}"
@@ -40,7 +52,13 @@ detect_platform() {
             ;;
         *)
             echo -e "${RED}Unsupported platform: ${platform}${NC}"
-            echo "Supported platforms: darwin-aarch64 (macOS Apple Silicon), linux-x86_64, linux-aarch64, windows-x86_64"
+            echo "Supported platforms:"
+            echo "  - darwin-aarch64 (macOS Apple Silicon)"
+            echo "  - linux-x86_64-gnu (Debian/Ubuntu x86_64)"
+            echo "  - linux-x86_64-musl (Alpine x86_64)"
+            echo "  - linux-aarch64-gnu (Debian/Ubuntu ARM64)"
+            echo "  - linux-aarch64-musl (Alpine ARM64)"
+            echo "  - windows-x86_64"
             exit 1
             ;;
     esac
