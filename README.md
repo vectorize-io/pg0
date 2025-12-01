@@ -9,7 +9,7 @@ Includes **pgvector** for AI/vector workloads out of the box.
 - **Zero dependencies** - single binary, no installation required
 - **Embedded PostgreSQL 16** with pgvector pre-installed
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
-- Works on macOS (Apple Silicon), Linux (x86_64, statically linked), and Windows (x64)
+- Works on macOS (Apple Silicon), Linux (x86_64 & ARM64, statically linked), and Windows (x64)
 - Bundled `psql` client - no separate installation needed
 - Data persists between restarts
 

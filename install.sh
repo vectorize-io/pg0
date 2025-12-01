@@ -32,7 +32,7 @@ detect_platform() {
 
     # Validate supported platforms (must have pgvector pre-compiled)
     case "$platform" in
-        darwin-aarch64|linux-x86_64|windows-x86_64)
+        darwin-aarch64|linux-x86_64|linux-aarch64|windows-x86_64)
             ;;
         darwin-x86_64)
             echo -e "${YELLOW}Note: Intel Mac users can run the Apple Silicon binary via Rosetta 2${NC}"
@@ -40,7 +40,7 @@ detect_platform() {
             ;;
         *)
             echo -e "${RED}Unsupported platform: ${platform}${NC}"
-            echo "Supported platforms: darwin-aarch64 (macOS Apple Silicon), linux-x86_64, windows-x86_64"
+            echo "Supported platforms: darwin-aarch64 (macOS Apple Silicon), linux-x86_64, linux-aarch64, windows-x86_64"
             exit 1
             ;;
     esac
@@ -108,7 +108,6 @@ main() {
 
     echo ""
     echo "pg0 is now available."
-    pg0 -h
 }
 
 main "$@"
