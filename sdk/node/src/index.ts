@@ -517,6 +517,18 @@ export function listInstancesSync(): InstanceInfo[] {
   return JSON.parse(runPg0Sync("list", "-o", "json"));
 }
 
+/** List available PostgreSQL extensions. */
+export async function listExtensions(): Promise<string[]> {
+  const { stdout } = await runPg0("list-extensions");
+  return stdout.trim().split("\n").filter(line => line.trim());
+}
+
+/** List available PostgreSQL extensions (synchronous). */
+export function listExtensionsSync(): string[] {
+  const stdout = runPg0Sync("list-extensions");
+  return stdout.trim().split("\n").filter(line => line.trim());
+}
+
 /** Start a PostgreSQL instance (convenience function). */
 export async function start(options: Pg0Options = {}): Promise<InstanceInfo> {
   return new Pg0(options).start();

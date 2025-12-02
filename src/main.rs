@@ -125,6 +125,20 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Show PostgreSQL logs
+    Logs {
+        /// Instance name
+        #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
+        name: String,
+
+        /// Number of lines to show (default: all)
+        #[arg(short = 'n', long)]
+        lines: Option<usize>,
+
+        /// Follow log output (like tail -f)
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Install a PostgreSQL extension (e.g., pgvector)
     InstallExtension {
         /// Instance name
@@ -865,6 +879,87 @@ fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
     Ok(())
 }
 
+fn logs(name: String, lines: Option<usize>, follow: bool) -> Result<(), CliError> {
+    let instance_dir = get_instance_dir(&name)?;
+    let log_dir = instance_dir.join("data").join("log");
+
+    if !log_dir.exists() {
+        return Err(CliError::Other(format!(
+            "Log directory not found for instance '{}'. Has PostgreSQL been started?",
+            name
+        )));
+    }
+
+    // Find the most recent log file
+    let mut log_files: Vec<_> = fs::read_dir(&log_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .collect();
+
+    if log_files.is_empty() {
+        return Err(CliError::Other(format!(
+            "No log files found for instance '{}'",
+            name
+        )));
+    }
+
+    // Sort by modification time, most recent first
+    log_files.sort_by_key(|e| std::cmp::Reverse(
+        e.metadata().and_then(|m| m.modified()).ok()
+    ));
+
+    let log_file = &log_files[0].path();
+
+    if follow {
+        // Follow mode - use tail -f equivalent
+        println!("Following logs for instance '{}' (Ctrl+C to exit):", name);
+        println!("Log file: {}", log_file.display());
+        println!();
+
+        let mut file = fs::File::open(log_file)?;
+        let mut pos = file.metadata()?.len();
+
+        // Print existing content first
+        use std::io::{BufRead, BufReader, Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0))?;
+        let reader = BufReader::new(&file);
+        for line in reader.lines() {
+            println!("{}", line?);
+        }
+
+        // Now follow new content
+        loop {
+            file.seek(SeekFrom::Start(pos))?;
+            let reader = BufReader::new(&file);
+            for line in reader.lines() {
+                println!("{}", line?);
+            }
+            pos = file.metadata()?.len();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    } else {
+        // Show logs (optionally limited to N lines)
+        use std::io::{BufRead, BufReader};
+        let file = fs::File::open(log_file)?;
+        let reader = BufReader::new(file);
+        let all_lines: Vec<_> = reader.lines().collect::<Result<_, _>>()?;
+
+        let lines_to_show = if let Some(n) = lines {
+            &all_lines[all_lines.len().saturating_sub(n)..]
+        } else {
+            &all_lines[..]
+        };
+
+        println!("Logs for instance '{}' ({})", name, log_file.display());
+        println!();
+        for line in lines_to_show {
+            println!("{}", line);
+        }
+    }
+
+    Ok(())
+}
+
 fn find_installed_version(installation_dir: &PathBuf) -> Result<String, CliError> {
     if let Ok(entries) = fs::read_dir(installation_dir) {
         for entry in entries.flatten() {
@@ -1070,6 +1165,7 @@ fn main() {
         Commands::Info { name, output } => info(name, output),
         Commands::List { output } => list(output),
         Commands::Psql { name, args } => psql(name, args),
+        Commands::Logs { name, lines, follow } => logs(name, lines, follow),
         Commands::InstallExtension { name, extension } => install_extension(name, extension),
         Commands::ListExtensions => list_extensions(),
     };

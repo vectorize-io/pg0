@@ -1,5 +1,9 @@
 # pg0
 
+[![PyPI version](https://badge.fury.io/py/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
+
 **Zero-dependency embedded PostgreSQL** - Run PostgreSQL locally without installation. A single binary that downloads and manages PostgreSQL for you.
 
 Includes **pgvector** for AI/vector workloads out of the box.
@@ -7,14 +11,17 @@ Includes **pgvector** for AI/vector workloads out of the box.
 ## Features
 
 - **Zero dependencies** - single binary, no installation required
-- **Embedded PostgreSQL 16** with pgvector pre-installed
+- **Embedded PostgreSQL 18** with pgvector 0.8.1 pre-installed
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
 - Works on macOS (Apple Silicon), Linux (x86_64 & ARM64), and Windows (x64)
+- **Python & Node.js SDKs** - programmatic API for embedding in your applications
 - Bundled `psql` client - no separate installation needed
 - Data persists between restarts
 - **Smart binary selection** - automatically downloads the right binary for your Linux distribution (Debian/Ubuntu vs Alpine)
 
 ## Installation
+
+### CLI Binary
 
 The install script automatically detects your platform and downloads the correct binary:
 
@@ -26,6 +33,51 @@ Or with a custom install directory:
 
 ```bash
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash
+```
+
+### Python SDK
+
+Install via pip:
+
+```bash
+pip install pg0-embedded
+```
+
+Quick start:
+
+```python
+from pg0 import Pg0
+
+# Start PostgreSQL
+pg = Pg0()
+pg.start()
+print(pg.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+
+# Or use context manager
+with Pg0() as pg:
+    result = pg.execute("SELECT version();")
+    print(result)
+```
+
+See [PyPI package](https://pypi.org/project/pg0-embedded/) for more details.
+
+### Node.js SDK
+
+Install via npm:
+
+```bash
+npm install @vectorize-io/pg0
+```
+
+Quick start:
+
+```typescript
+import { Pg0 } from '@vectorize-io/pg0';
+
+const pg = new Pg0();
+await pg.start();
+console.log(await pg.getUri());
+await pg.stop();
 ```
 
 ### Linux Distributions
@@ -162,6 +214,7 @@ pg0 provides the following commands:
 4. **info** - Display instance information (status, connection URI, etc.)
 5. **list** - List all PostgreSQL instances
 6. **psql** - Open an interactive psql shell connected to an instance
+7. **logs** - View PostgreSQL logs for debugging
 
 ### Start PostgreSQL
 
@@ -228,6 +281,26 @@ pg0 psql -c "SELECT version();"
 # Run a SQL file
 pg0 psql -f schema.sql
 ```
+
+### View Logs
+
+View PostgreSQL logs for debugging startup issues or errors:
+
+```bash
+# View all logs
+pg0 logs
+
+# View last 50 lines
+pg0 logs -n 50
+
+# Follow logs in real-time (like tail -f)
+pg0 logs --follow
+
+# Logs for a specific instance
+pg0 logs --name myapp
+```
+
+Logs are stored in `~/.pg0/instances/<name>/data/log/`.
 
 ### Using pgvector
 

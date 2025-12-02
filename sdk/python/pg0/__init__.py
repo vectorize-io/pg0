@@ -436,6 +436,22 @@ def list_instances() -> list[InstanceInfo]:
     return [InstanceInfo.from_dict(item) for item in data]
 
 
+def list_extensions() -> list[str]:
+    """
+    List available PostgreSQL extensions.
+
+    Returns:
+        List of available extension names
+
+    Example:
+        extensions = pg0.list_extensions()
+        print(extensions)  # ['vector', 'postgis', ...]
+    """
+    result = _run_pg0("list-extensions", check=False)
+    lines = result.stdout.strip().split("\n")
+    return [line.strip() for line in lines if line.strip()]
+
+
 def start(
     name: str = "default",
     port: int = 5432,
@@ -531,6 +547,7 @@ __all__ = [
     "Pg0AlreadyRunningError",
     "install",
     "list_instances",
+    "list_extensions",
     "start",
     "stop",
     "drop",
