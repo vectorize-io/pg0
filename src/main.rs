@@ -292,17 +292,29 @@ fn get_platform() -> Option<&'static str> {
     { Some("aarch64-apple-darwin") }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     { Some("x86_64-apple-darwin") }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+
+    // Linux x86_64 - distinguish between musl and gnu
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "musl"))]
+    { Some("x86_64-unknown-linux-musl") }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
     { Some("x86_64-unknown-linux-gnu") }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+
+    // Linux aarch64 - distinguish between musl and gnu
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "musl"))]
+    { Some("aarch64-unknown-linux-musl") }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"))]
     { Some("aarch64-unknown-linux-gnu") }
+
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     { Some("x86_64-pc-windows-msvc") }
+
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64", target_env = "musl"),
+        all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
+        all(target_os = "linux", target_arch = "aarch64", target_env = "musl"),
+        all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"),
         all(target_os = "windows", target_arch = "x86_64"),
     )))]
     { None }

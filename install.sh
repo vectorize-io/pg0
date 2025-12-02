@@ -68,7 +68,16 @@ detect_platform() {
 
 # Get latest release tag
 get_latest_version() {
-    curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    local auth_header=""
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
+    fi
+
+    if [ -n "$auth_header" ]; then
+        curl -sL -H "$auth_header" "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    else
+        curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+    fi
 }
 
 main() {

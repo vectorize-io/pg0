@@ -37,6 +37,101 @@ pg0 provides separate binaries optimized for different Linux distributions:
 
 The install script automatically detects your distribution and downloads the correct binary.
 
+## Docker
+
+pg0 works in Docker containers. Here are the minimal setup steps for each supported image type:
+
+### Debian/Ubuntu (glibc-based)
+
+```dockerfile
+FROM debian:bookworm-slim
+# or: python:3.11-slim, ubuntu:22.04, etc.
+
+# Install required dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    libxml2 \
+    libssl3 \
+    libgssapi-krb5-2 \
+    && apt-get install -y libicu72 || apt-get install -y libicu74 || apt-get install -y libicu* \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user (PostgreSQL cannot run as root)
+RUN useradd -m -s /bin/bash pguser
+USER pguser
+
+# Install pg0
+RUN curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash
+ENV PATH="/home/pguser/.local/bin:${PATH}"
+
+# Start PostgreSQL when container runs
+CMD ["bash", "-c", "pg0 start && tail -f /dev/null"]
+```
+
+Or start it with your application:
+
+```bash
+docker run -d myimage bash -c "pg0 start && exec your-application"
+```
+
+### Alpine (musl-based)
+
+```dockerfile
+FROM alpine:latest
+# or: python:3.11-alpine
+
+# Install required dependencies
+RUN apk add --no-cache curl bash shadow
+
+# Create non-root user (PostgreSQL cannot run as root)
+RUN adduser -D -s /bin/bash pguser
+USER pguser
+
+# Install pg0
+RUN curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash
+ENV PATH="/home/pguser/.local/bin:${PATH}"
+
+# Start PostgreSQL when container runs
+CMD ["sh", "-c", "pg0 start && tail -f /dev/null"]
+```
+
+Or start it with your application:
+
+```bash
+docker run -d myimage sh -c "pg0 start && exec your-application"
+```
+
+### Quick Test
+
+Run pg0 in a Docker container with a single command:
+
+```bash
+# Debian/Ubuntu
+docker run --rm -it python:3.11-slim bash -c '
+  apt-get update -qq &&
+  apt-get install -y curl libxml2 libssl3 libgssapi-krb5-2 libicu72 &&
+  useradd -m pguser &&
+  su - pguser -c "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash &&
+    export PATH=\"\$HOME/.local/bin:\$PATH\" &&
+    pg0 start &&
+    sleep 3 &&
+    pg0 psql -c \"SELECT version();\""
+'
+
+# Alpine
+docker run --rm -it python:3.11-alpine sh -c '
+  apk add --no-cache curl bash shadow &&
+  adduser -D pguser &&
+  su - pguser -c "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash &&
+    export PATH=\"\$HOME/.local/bin:\$PATH\" &&
+    pg0 start &&
+    sleep 3 &&
+    pg0 psql -c \"SELECT version();\""
+'
+```
+
+**Note:** PostgreSQL requires a non-root user for security. The examples above create a `pguser` for this purpose.
+
 ## Quick Start
 
 ```bash
