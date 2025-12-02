@@ -81,10 +81,37 @@ function getPlatform(): string {
   if (os === "darwin") {
     return "darwin-aarch64"; // Intel Macs use Rosetta
   } else if (os === "linux") {
+    // Detect architecture
+    let arch_str: string;
     if (cpu === "x64") {
-      return "linux-x86_64";
+      arch_str = "x86_64";
+    } else if (cpu === "arm64") {
+      arch_str = "aarch64";
+    } else {
+      throw new Pg0NotFoundError(`Unsupported Linux architecture: ${cpu}`);
     }
-    throw new Pg0NotFoundError(`Unsupported Linux architecture: ${cpu}`);
+
+    // Detect libc (musl vs glibc)
+    // Check for musl by looking for the musl loader
+    const { execSync } = require("child_process");
+    try {
+      const ldd = execSync("ldd --version 2>&1", { encoding: "utf-8" });
+      if (ldd.toLowerCase().includes("musl")) {
+        return `linux-${arch_str}-musl`;
+      }
+    } catch {
+      // If ldd fails, check for musl loader file
+      const { existsSync } = require("fs");
+      if (
+        existsSync(`/lib/ld-musl-${arch_str}.so.1`) ||
+        existsSync(`/lib/ld-musl-x86_64.so.1`) ||
+        existsSync(`/lib/ld-musl-aarch64.so.1`)
+      ) {
+        return `linux-${arch_str}-musl`;
+      }
+    }
+    // Default to glibc
+    return `linux-${arch_str}-gnu`;
   } else if (os === "win32") {
     return "windows-x86_64";
   }

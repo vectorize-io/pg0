@@ -104,10 +104,42 @@ def _get_platform() -> str:
         # macOS - only Apple Silicon supported, Intel uses Rosetta
         return "darwin-aarch64"
     elif system == "linux":
+        # Detect architecture
         if machine in ("x86_64", "amd64"):
-            return "linux-x86_64"
+            arch_str = "x86_64"
+        elif machine in ("aarch64", "arm64"):
+            arch_str = "aarch64"
         else:
             raise Pg0NotFoundError(f"Unsupported Linux architecture: {machine}")
+
+        # Detect libc (musl vs glibc)
+        # Check for musl by looking for the musl loader
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["ldd", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = result.stdout + result.stderr
+            if "musl" in output.lower():
+                return f"linux-{arch_str}-musl"
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Check for musl loader file
+        musl_loaders = [
+            f"/lib/ld-musl-{arch_str}.so.1",
+            "/lib/ld-musl-x86_64.so.1",
+            "/lib/ld-musl-aarch64.so.1",
+        ]
+        for loader in musl_loaders:
+            if Path(loader).exists():
+                return f"linux-{arch_str}-musl"
+
+        # Default to glibc
+        return f"linux-{arch_str}-gnu"
     elif system == "windows":
         return "windows-x86_64"
     else:
