@@ -29,6 +29,8 @@ enum CliError {
     PidParse,
     #[error("Extension '{0}' not found")]
     ExtensionNotFound(String),
+    #[error("{0}")]
+    Other(String),
 }
 
 #[derive(Parser)]
