@@ -36,6 +36,22 @@ detect_platform() {
         else
             # Running on Debian/Ubuntu/etc with glibc
             libc="gnu"
+
+            # Check glibc version - if too old, fall back to musl (statically linked)
+            # Our gnu binaries require GLIBC 2.31+
+            if command -v ldd >/dev/null 2>&1; then
+                glibc_version=$(ldd --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+' | head -n1)
+                if [ -n "$glibc_version" ]; then
+                    # Compare versions (2.31 minimum)
+                    glibc_major=$(echo "$glibc_version" | cut -d. -f1)
+                    glibc_minor=$(echo "$glibc_version" | cut -d. -f2)
+
+                    if [ "$glibc_major" -lt 2 ] || ([ "$glibc_major" -eq 2 ] && [ "$glibc_minor" -lt 31 ]); then
+                        echo -e "${YELLOW}Note: Detected old glibc ${glibc_version}. Using statically-linked musl binary for compatibility.${NC}"
+                        libc="musl"
+                    fi
+                fi
+            fi
         fi
         platform="${os}-${arch}-${libc}"
     else
