@@ -4,20 +4,33 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 
-**Zero-dependency embedded PostgreSQL** - Run PostgreSQL locally without installation. A single binary that downloads and manages PostgreSQL for you.
+**Language-agnostic embedded PostgreSQL with zero dependencies.**
 
-Includes **pgvector** for AI/vector workloads out of the box.
+A single binary that runs PostgreSQL locally - no installation, no configuration, no Docker required. Includes **pgvector** for AI/vector workloads out of the box.
+
+## Why pg0?
+
+**Stop compromising on SQLite.** When building applications that need a database, developers often choose SQLite for simplicity - but then face painful migrations when they need PostgreSQL features in production.
+
+pg0 gives you **real PostgreSQL** with the same simplicity as SQLite:
+
+- **No installation** - download a single binary and run `pg0 start`
+- **No Docker** - no containers, no daemon, no complexity
+- **No configuration** - sensible defaults, just works
+- **Production parity** - develop with the same database you'll deploy
+- **Full PostgreSQL** - JSON, arrays, CTEs, window functions, extensions, pgvector - everything works
+
+Use pg0 for local development, testing, CI/CD pipelines, or any scenario where you want PostgreSQL without the setup overhead.
 
 ## Features
 
-- **Zero dependencies** - single binary, no installation required
-- **Embedded PostgreSQL 18** with pgvector 0.8.1 pre-installed
+- **Zero dependencies** - single binary, works offline
+- **PostgreSQL 18** with pgvector 0.8.1 bundled
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
-- Works on macOS (Apple Silicon), Linux (x86_64 & ARM64), and Windows (x64)
-- **Python & Node.js SDKs** - programmatic API for embedding in your applications
-- Bundled `psql` client - no separate installation needed
-- Data persists between restarts
-- **Smart binary selection** - automatically downloads the right binary for your Linux distribution (Debian/Ubuntu vs Alpine)
+- **Cross-platform** - macOS (Apple Silicon), Linux (x86_64 & ARM64), Windows (x64)
+- **Language SDKs** - Python and Node.js libraries for programmatic control
+- **Bundled psql** - no separate client installation needed
+- **Persistent data** - survives restarts, stored in `~/.pg0/`
 
 ## Installation
 
