@@ -396,9 +396,7 @@ pg0 start -c shared_buffers=1GB -c maintenance_work_mem=2GB
 
 ## How It Works
 
-PostgreSQL is **bundled directly** into the pg0 binary - no downloads required on first run! On first start, pg0 extracts PostgreSQL to `~/.pg0/installation/` and initializes the database.
-
-pgvector is downloaded on first run from pre-compiled binaries and cached in the installation directory.
+PostgreSQL and pgvector are **bundled directly** into the pg0 binary - no downloads required, works completely offline! On first start, pg0 extracts PostgreSQL and pgvector to `~/.pg0/installation/` and initializes the database.
 
 Data is stored in `~/.pg0/instances/<name>/data/` (or your custom `--data-dir`) and persists between restarts.
 

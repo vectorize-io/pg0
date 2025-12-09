@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=versions.env");
-    println!("cargo:rerun-if-env-changed=BUNDLE_POSTGRESQL");
 
     // Load versions from versions.env
     let versions_env = fs::read_to_string("versions.env").expect("Failed to read versions.env");
@@ -35,27 +34,11 @@ fn main() {
     println!("cargo:rustc-env=PGVECTOR_COMPILED_TAG={}", pgvector_tag);
     println!("cargo:rustc-env=PGVECTOR_COMPILED_REPO={}", pgvector_repo);
 
-    // Check if we should bundle PostgreSQL
-    let bundle = env::var("BUNDLE_POSTGRESQL")
-        .map(|v| v == "1" || v == "true")
-        .unwrap_or(false);
-
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    if bundle {
-        bundle_postgresql(&pg_version, &out_dir);
-    } else {
-        // Create an empty marker file so include_bytes! doesn't fail
-        let marker = out_dir.join("postgresql_bundle.tar.gz");
-        if !marker.exists() {
-            fs::write(&marker, b"").expect("Failed to create empty bundle marker");
-        }
-        println!(
-            "cargo:rustc-env=POSTGRESQL_BUNDLE_PATH={}",
-            marker.display()
-        );
-        println!("cargo:rustc-env=POSTGRESQL_BUNDLED=false");
-    }
+    // Bundle PostgreSQL and pgvector
+    bundle_postgresql(&pg_version, &out_dir);
+    bundle_pgvector(&pg_version, &pgvector_tag, &pgvector_repo, &out_dir);
 }
 
 fn bundle_postgresql(pg_version: &str, out_dir: &PathBuf) {
@@ -115,7 +98,71 @@ fn bundle_postgresql(pg_version: &str, out_dir: &PathBuf) {
         "cargo:rustc-env=POSTGRESQL_BUNDLE_PATH={}",
         bundle_path.display()
     );
-    println!("cargo:rustc-env=POSTGRESQL_BUNDLED=true");
+}
+
+fn bundle_pgvector(pg_version: &str, pgvector_tag: &str, pgvector_repo: &str, out_dir: &PathBuf) {
+    let target = env::var("TARGET").unwrap();
+
+    // Map Rust target to pgvector platform name
+    let pgvector_platform = match target.as_str() {
+        "aarch64-apple-darwin" => "aarch64-apple-darwin",
+        "x86_64-apple-darwin" => "x86_64-apple-darwin",
+        "x86_64-unknown-linux-gnu" => "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl" => "x86_64-unknown-linux-gnu", // musl uses gnu pgvector
+        "aarch64-unknown-linux-gnu" => "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl" => "aarch64-unknown-linux-gnu", // musl uses gnu pgvector
+        "x86_64-pc-windows-msvc" => {
+            eprintln!("Warning: pgvector not available for Windows, skipping bundle");
+            let marker = out_dir.join("pgvector_bundle.tar.gz");
+            fs::write(&marker, b"").expect("Failed to create empty pgvector marker");
+            println!(
+                "cargo:rustc-env=PGVECTOR_BUNDLE_PATH={}",
+                marker.display()
+            );
+            return;
+        }
+        _ => {
+            eprintln!(
+                "Warning: Unknown target {}, pgvector will not be bundled",
+                target
+            );
+            let marker = out_dir.join("pgvector_bundle.tar.gz");
+            fs::write(&marker, b"").expect("Failed to create empty pgvector marker");
+            println!(
+                "cargo:rustc-env=PGVECTOR_BUNDLE_PATH={}",
+                marker.display()
+            );
+            return;
+        }
+    };
+
+    // Get PG major version (e.g., "18" from "18.1.0")
+    let pg_major = pg_version.split('.').next().unwrap_or("18");
+
+    let filename = format!("pgvector-{}-pg{}.tar.gz", pgvector_platform, pg_major);
+    let url = format!(
+        "https://github.com/{}/releases/download/{}/{}",
+        pgvector_repo, pgvector_tag, filename
+    );
+
+    let bundle_path = out_dir.join(&filename);
+
+    // Download if not already cached
+    if !bundle_path.exists() {
+        eprintln!(
+            "Downloading pgvector for {} (PG {})...",
+            pgvector_platform, pg_major
+        );
+        download_file(&url, &bundle_path).expect("Failed to download pgvector bundle");
+        eprintln!("Downloaded to {}", bundle_path.display());
+    } else {
+        eprintln!("Using cached pgvector bundle: {}", bundle_path.display());
+    }
+
+    println!(
+        "cargo:rustc-env=PGVECTOR_BUNDLE_PATH={}",
+        bundle_path.display()
+    );
 }
 
 fn download_file(url: &str, dest: &PathBuf) -> io::Result<()> {

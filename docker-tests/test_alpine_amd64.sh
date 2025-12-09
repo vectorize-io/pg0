@@ -12,7 +12,6 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 INSTALL_SCRIPT="$SCRIPT_DIR/../install.sh"
 
 docker run --rm --platform=linux/amd64 \
-  -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
   -v "$INSTALL_SCRIPT:/tmp/install.sh:ro" \
   python:3.11-alpine sh -c '
 set -e
@@ -39,7 +38,6 @@ echo ""
 echo "=== Switching to non-root user for pg0 ==="
 su - pguser << EOF
 set -e
-export GITHUB_TOKEN="${GITHUB_TOKEN}"
 
 echo "=== Installing pg0 ==="
 bash /usr/local/bin/install.sh

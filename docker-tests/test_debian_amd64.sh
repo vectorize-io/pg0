@@ -21,7 +21,6 @@ if [ -n "${PG0_BINARY_PATH:-}" ]; then
 fi
 
 docker run --rm --platform=linux/amd64 \
-  -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
   $BINARY_ENV \
   -v "$INSTALL_SCRIPT:/tmp/install.sh:ro" \
   $VOLUME_ARGS \
@@ -54,7 +53,6 @@ echo ""
 echo "=== Switching to non-root user for pg0 ==="
 su - pguser << EOF
 set -e
-export GITHUB_TOKEN="${GITHUB_TOKEN}"
 export PG0_BINARY_URL="${PG0_BINARY_URL}"
 
 echo "=== Installing pg0 ==="

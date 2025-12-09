@@ -17,8 +17,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        env:
-          BUNDLE_POSTGRESQL: "true"
         run: cargo build --release
 
       - name: Upload CLI artifact

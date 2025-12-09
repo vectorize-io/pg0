@@ -47,22 +47,6 @@ chmod +x *.sh
 ./test_alpine_arm64.sh
 ```
 
-### Using GitHub Token (Avoid Rate Limiting)
-
-To avoid GitHub API rate limiting, set a personal access token:
-
-```bash
-# Create a token at https://github.com/settings/tokens
-# No scopes needed for public repos
-
-export GITHUB_TOKEN=ghp_your_token_here
-
-# Now run tests with 5000 req/hour instead of 60
-./test_debian_amd64.sh
-```
-
-The token is automatically passed into the Docker containers.
-
 ## Expected Results
 
 ### Debian/Ubuntu (glibc)
@@ -78,14 +62,10 @@ The token is automatically passed into the Docker containers.
 ## Requirements
 
 - Docker installed and running
-- Internet connection (to download pg0 and PostgreSQL)
-- ~500MB free space for PostgreSQL binaries
+- Internet connection (to download pg0 binary)
+- ~50MB free space (PostgreSQL and pgvector are bundled in the binary)
 
 ## Troubleshooting
-
-### Test hangs during PostgreSQL download
-
-This may be due to GitHub API rate limiting. Wait a few minutes and try again.
 
 ### ARM64 tests are slow
 

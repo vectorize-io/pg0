@@ -11,13 +11,11 @@ use tar::Archive;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 
-/// Whether PostgreSQL is bundled in this binary
-fn is_postgresql_bundled() -> bool {
-    env!("POSTGRESQL_BUNDLED") == "true"
-}
-
-/// The embedded PostgreSQL bundle (empty if not bundled)
+/// The embedded PostgreSQL bundle
 static POSTGRESQL_BUNDLE: &[u8] = include_bytes!(env!("POSTGRESQL_BUNDLE_PATH"));
+
+/// The embedded pgvector bundle
+static PGVECTOR_BUNDLE: &[u8] = include_bytes!(env!("PGVECTOR_BUNDLE_PATH"));
 
 #[derive(Error, Debug)]
 enum CliError {
@@ -426,58 +424,10 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
     Ok(version_dir)
 }
 
-/// Get the current platform string for downloads
-fn get_platform() -> Option<&'static str> {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { Some("aarch64-apple-darwin") }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { Some("x86_64-apple-darwin") }
-
-    // Linux x86_64 - distinguish between musl and gnu
-    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "musl"))]
-    { Some("x86_64-unknown-linux-musl") }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
-    { Some("x86_64-unknown-linux-gnu") }
-
-    // Linux aarch64 - distinguish between musl and gnu
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "musl"))]
-    { Some("aarch64-unknown-linux-musl") }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"))]
-    { Some("aarch64-unknown-linux-gnu") }
-
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    { Some("x86_64-pc-windows-msvc") }
-
-    #[cfg(not(any(
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "x86_64", target_env = "musl"),
-        all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"),
-        all(target_os = "linux", target_arch = "aarch64", target_env = "musl"),
-        all(target_os = "linux", target_arch = "aarch64", target_env = "gnu"),
-        all(target_os = "windows", target_arch = "x86_64"),
-    )))]
-    { None }
-}
-
 /// Install pgvector extension files into the PostgreSQL installation
 fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), CliError> {
-    let platform = get_platform().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Unsupported, "Unsupported platform for pgvector")
-    })?;
-
     let pg_major = pg_version.split('.').next().unwrap_or("16");
     let pgvector_version = env!("PGVECTOR_VERSION");
-    let pgvector_tag = env!("PGVECTOR_COMPILED_TAG");
-    let pgvector_repo = env!("PGVECTOR_COMPILED_REPO");
-
-    let url = format!(
-        "https://github.com/{}/releases/download/{}/pgvector-{}-pg{}.tar.gz",
-        pgvector_repo, pgvector_tag, platform, pg_major
-    );
-
-    println!("Installing pgvector {}...", pgvector_version);
-    tracing::debug!("Downloading pgvector from {}", url);
 
     // Find the version-specific installation directory
     let version_dir = fs::read_dir(installation_dir)?
@@ -498,65 +448,42 @@ fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), 
         return Ok(());
     }
 
-    // Download using curl
-    let temp_dir = std::env::temp_dir().join("pgvector_download");
-    fs::create_dir_all(&temp_dir)?;
-    let archive_path = temp_dir.join("pgvector.tar.gz");
-
-    let status = std::process::Command::new("curl")
-        .args(["-fsSL", &url, "-o"])
-        .arg(&archive_path)
-        .status()?;
-
-    if !status.success() {
-        fs::remove_dir_all(&temp_dir).ok();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to download pgvector from {}", url)
-        ).into());
+    if PGVECTOR_BUNDLE.is_empty() {
+        return Err(CliError::Other(
+            "pgvector bundle is empty - this binary was not built with BUNDLE_POSTGRESQL=true".to_string()
+        ));
     }
 
-    // Extract using tar
-    let extract_dir = temp_dir.join("extracted");
-    fs::create_dir_all(&extract_dir)?;
+    println!("Installing pgvector {}...", pgvector_version);
 
-    let status = std::process::Command::new("tar")
-        .args(["-xzf"])
-        .arg(&archive_path)
-        .arg("-C")
-        .arg(&extract_dir)
-        .status()?;
+    // Extract bundled pgvector
+    let decoder = GzDecoder::new(PGVECTOR_BUNDLE);
+    let mut archive = Archive::new(decoder);
 
-    if !status.success() {
-        fs::remove_dir_all(&temp_dir).ok();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to extract pgvector archive"
-        ).into());
-    }
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
 
-    // Copy files to PostgreSQL installation
-    fn copy_files_recursive(src: &PathBuf, lib_dir: &PathBuf, ext_dir: &PathBuf) -> std::io::Result<()> {
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                copy_files_recursive(&path, lib_dir, ext_dir)?;
-            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".so") || name.ends_with(".dylib") || name.ends_with(".dll") {
-                    fs::copy(&path, lib_dir.join(name))?;
-                } else if name == "vector.control" || name.starts_with("vector--") {
-                    fs::copy(&path, ext_dir.join(name))?;
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".so") || name.ends_with(".dylib") || name.ends_with(".dll") {
+                let dest = lib_dir.join(name);
+                entry.unpack(&dest)?;
+                // Make library executable on Unix
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(metadata) = dest.metadata() {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(&dest, perms);
+                    }
                 }
+            } else if name == "vector.control" || name.starts_with("vector--") {
+                let dest = extension_dir.join(name);
+                entry.unpack(&dest)?;
             }
         }
-        Ok(())
     }
-
-    copy_files_recursive(&extract_dir, &lib_dir, &extension_dir)?;
-
-    // Cleanup
-    fs::remove_dir_all(&temp_dir).ok();
 
     println!("pgvector {} installed successfully!", pgvector_version);
     Ok(())
@@ -633,43 +560,22 @@ fn start(
         }
     }
 
-    // If PostgreSQL is bundled, extract it and use trust_installation_dir
-    // Otherwise, fall back to downloading via postgresql_embedded
-    let (settings, use_bundled) = if is_postgresql_bundled() {
-        // Extract bundled PostgreSQL
-        let version_install_dir = extract_bundled_postgresql(&installation_dir, &version)?;
+    // Extract bundled PostgreSQL
+    let version_install_dir = extract_bundled_postgresql(&installation_dir, &version)?;
 
-        let settings = Settings {
-            version: version_req,
-            port,
-            username: username.clone(),
-            password: password.clone(),
-            data_dir: data_dir.clone(),
-            installation_dir: version_install_dir,
-            configuration,
-            trust_installation_dir: true, // Skip download, use our extracted files
-            ..Default::default()
-        };
-        (settings, true)
-    } else {
-        let settings = Settings {
-            version: version_req,
-            port,
-            username: username.clone(),
-            password: password.clone(),
-            data_dir: data_dir.clone(),
-            installation_dir: installation_dir.clone(),
-            configuration,
-            ..Default::default()
-        };
-        (settings, false)
+    let settings = Settings {
+        version: version_req,
+        port,
+        username: username.clone(),
+        password: password.clone(),
+        data_dir: data_dir.clone(),
+        installation_dir: version_install_dir,
+        configuration,
+        trust_installation_dir: true, // Use our extracted files
+        ..Default::default()
     };
 
     let mut postgresql = PostgreSQL::new(settings);
-
-    if !use_bundled {
-        println!("Downloading and installing PostgreSQL (this may take a moment on first run)...");
-    }
     postgresql.setup()?;
 
     // Install pgvector extension
