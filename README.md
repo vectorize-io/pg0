@@ -408,9 +408,66 @@ pg0 start -c shared_buffers=1GB -c maintenance_work_mem=2GB
 
 ## How It Works
 
-On first run, pg0 downloads PostgreSQL from [theseus-rs](https://github.com/theseus-rs/postgresql-binaries) and pgvector from pre-compiled binaries. These are cached in `~/.pg0/installation/` for subsequent runs.
+PostgreSQL is **bundled directly** into the pg0 binary - no downloads required on first run! On first start, pg0 extracts PostgreSQL to `~/.pg0/installation/` and initializes the database.
+
+pgvector is downloaded on first run from pre-compiled binaries and cached in the installation directory.
 
 Data is stored in `~/.pg0/instances/<name>/data/` (or your custom `--data-dir`) and persists between restarts.
+
+## Troubleshooting
+
+### GitHub API Rate Limit Exceeded
+
+pgvector is downloaded from GitHub on first run. If you see this error:
+
+```
+Error: HTTP status client error (403 rate limit exceeded) for url (https://api.github.com/...)
+```
+
+This means you've hit GitHub's API rate limit for unauthenticated requests (60 requests/hour).
+
+**Solution:** Set a GitHub token to increase the rate limit to 5,000 requests/hour:
+
+```bash
+# Create a token at https://github.com/settings/tokens (no scopes needed)
+export GITHUB_TOKEN=ghp_your_token_here
+pg0 start
+```
+
+Or inline:
+
+```bash
+GITHUB_TOKEN=ghp_your_token_here pg0 start
+```
+
+The token doesn't need any special permissions - a basic token with no scopes works fine.
+
+### PostgreSQL Cannot Run as Root
+
+PostgreSQL refuses to run as root for security reasons. If you see permission errors in Docker or Linux:
+
+```bash
+# Create a non-root user
+useradd -m pguser
+su - pguser -c "pg0 start"
+```
+
+See the [Docker](#docker) section for complete examples.
+
+### Port Already in Use
+
+If port 5432 is already in use, pg0 will automatically find the next available port when starting without an explicit `--port`:
+
+```bash
+pg0 start --name second-instance
+# Output: Port 5432 is in use, using port 5433 instead.
+```
+
+To use a specific port, specify it explicitly:
+
+```bash
+pg0 start --port 5433
+```
 
 ## Build from Source
 

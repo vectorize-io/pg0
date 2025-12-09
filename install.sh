@@ -103,34 +103,53 @@ main() {
     platform=$(detect_platform)
     echo "Detected platform: ${platform}"
 
-    local version
-    version=$(get_latest_version)
-    if [ -z "$version" ]; then
-        echo -e "${RED}Failed to fetch latest version${NC}"
-        exit 1
-    fi
-    echo "Latest version: ${version}"
-
     local ext=""
     if [[ "$platform" == windows* ]]; then
         ext=".exe"
     fi
 
-    local filename="${BINARY_NAME}-${platform}${ext}"
-    local url="https://github.com/${REPO}/releases/download/${version}/${filename}"
+    local url
+    # Check if PG0_BINARY_URL is set (supports file:// and http(s)://)
+    if [ -n "${PG0_BINARY_URL:-}" ]; then
+        url="${PG0_BINARY_URL}"
+        echo "Using custom binary URL: ${url}"
+    else
+        local version
+        version=$(get_latest_version)
+        if [ -z "$version" ]; then
+            echo -e "${RED}Failed to fetch latest version${NC}"
+            exit 1
+        fi
+        echo "Latest version: ${version}"
 
-    echo "Downloading from: ${url}"
+        local filename="${BINARY_NAME}-${platform}${ext}"
+        url="https://github.com/${REPO}/releases/download/${version}/${filename}"
+        echo "Downloading from: ${url}"
+    fi
 
     # Create install directory if it doesn't exist
     mkdir -p "${INSTALL_DIR}"
 
-    # Download binary
+    # Download/copy binary
     local tmp_file
     tmp_file=$(mktemp)
-    if ! curl -fsSL "${url}" -o "${tmp_file}"; then
-        echo -e "${RED}Failed to download binary${NC}"
-        rm -f "${tmp_file}"
-        exit 1
+
+    if [[ "$url" == file://* ]]; then
+        # Handle file:// URLs - just copy the file
+        local file_path="${url#file://}"
+        if [ ! -f "$file_path" ]; then
+            echo -e "${RED}File not found: ${file_path}${NC}"
+            rm -f "${tmp_file}"
+            exit 1
+        fi
+        cp "$file_path" "${tmp_file}"
+    else
+        # Handle http(s):// URLs
+        if ! curl -fsSL "${url}" -o "${tmp_file}"; then
+            echo -e "${RED}Failed to download binary${NC}"
+            rm -f "${tmp_file}"
+            exit 1
+        fi
     fi
 
     # Move to install directory

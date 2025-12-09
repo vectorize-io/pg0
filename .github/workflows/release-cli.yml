@@ -76,6 +76,8 @@ jobs:
           echo "RUSTFLAGS=-C target-feature=+crt-static" >> $GITHUB_ENV
 
       - name: Build
+        env:
+          BUNDLE_POSTGRESQL: "true"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact (Unix)
@@ -144,9 +146,9 @@ jobs:
           echo "- \`pg0-windows-x86_64.exe\` - Windows x64" >> release_notes.md
           echo "" >> release_notes.md
           echo "### Bundled Components" >> release_notes.md
-          echo "On first run, the CLI automatically downloads:" >> release_notes.md
-          echo "- PostgreSQL ${PG_VERSION} (from theseus-rs)" >> release_notes.md
-          echo "- pgvector ${PGVECTOR_VERSION}" >> release_notes.md
+          echo "PostgreSQL is bundled directly in the binary - no downloads required on first run!" >> release_notes.md
+          echo "- PostgreSQL ${PG_VERSION}" >> release_notes.md
+          echo "- pgvector ${PGVECTOR_VERSION} (downloaded on first run)" >> release_notes.md
           echo "" >> release_notes.md
           echo "### Installation (macOS/Linux)" >> release_notes.md
           echo "\`\`\`bash" >> release_notes.md

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use flate2::read::GzDecoder;
 use postgresql_embedded::blocking::PostgreSQL;
 use postgresql_embedded::{Settings, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -6,8 +7,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use tar::Archive;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
+
+/// Whether PostgreSQL is bundled in this binary
+fn is_postgresql_bundled() -> bool {
+    env!("POSTGRESQL_BUNDLED") == "true"
+}
+
+/// The embedded PostgreSQL bundle (empty if not bundled)
+static POSTGRESQL_BUNDLE: &[u8] = include_bytes!(env!("POSTGRESQL_BUNDLE_PATH"));
 
 #[derive(Error, Debug)]
 enum CliError {
@@ -56,9 +66,9 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
         name: String,
 
-        /// Port to listen on
-        #[arg(short, long, default_value = "5432")]
-        port: u16,
+        /// Port to listen on (auto-allocates if not specified and default port is in use)
+        #[arg(short, long)]
+        port: Option<u16>,
 
         /// PostgreSQL version (must match bundled version)
         #[arg(short = 'V', long, default_value = env!("PG_VERSION"))]
@@ -302,6 +312,120 @@ fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Check if a port is available for binding
+fn is_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Find an available port, starting from the given port
+fn find_available_port(start_port: u16) -> u16 {
+    let mut port = start_port;
+    while !is_port_available(port) {
+        port += 1;
+        if port > 65535 - 100 {
+            // Wrap around to a random high port if we've gone too far
+            port = 49152; // Start of dynamic/private port range
+        }
+    }
+    port
+}
+
+/// Extract the bundled PostgreSQL to the installation directory
+/// Returns the path to the version-specific directory (e.g., ~/.pg0/installation/18.1.0)
+fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> Result<PathBuf, CliError> {
+    let version_dir = installation_dir.join(pg_version);
+
+    // Check if already extracted
+    let bin_dir = version_dir.join("bin");
+    if bin_dir.exists() && bin_dir.join("postgres").exists() {
+        tracing::debug!("PostgreSQL already extracted at {}", version_dir.display());
+        return Ok(version_dir);
+    }
+
+    if POSTGRESQL_BUNDLE.is_empty() {
+        return Err(CliError::Other(
+            "PostgreSQL bundle is empty - this binary was not built with BUNDLE_POSTGRESQL=true".to_string()
+        ));
+    }
+
+    println!("Extracting bundled PostgreSQL {}...", pg_version);
+    fs::create_dir_all(&version_dir)?;
+
+    // Extract the tar.gz bundle
+    // The archive contains paths like "postgresql-18.1.0-aarch64-apple-darwin/bin/postgres"
+    // We need to extract to version_dir, stripping the first path component
+    let decoder = GzDecoder::new(POSTGRESQL_BUNDLE);
+    let mut archive = Archive::new(decoder);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+
+        // Strip the first component (e.g., "postgresql-18.1.0-aarch64-apple-darwin")
+        let stripped_path: PathBuf = path.components().skip(1).collect();
+        if stripped_path.as_os_str().is_empty() {
+            continue; // Skip the root directory entry
+        }
+
+        let dest_path = version_dir.join(&stripped_path);
+
+        // Create parent directories if needed
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Extract the entry
+        if entry.header().entry_type().is_dir() {
+            fs::create_dir_all(&dest_path)?;
+        } else {
+            entry.unpack(&dest_path)?;
+        }
+    }
+
+    // Verify extraction
+    if !bin_dir.join("postgres").exists() {
+        return Err(CliError::Other(format!(
+            "PostgreSQL extraction failed - postgres binary not found at {}",
+            bin_dir.display()
+        )));
+    }
+
+    // Make binaries executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = fs::read_dir(&bin_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(metadata) = path.metadata() {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(&path, perms);
+                    }
+                }
+            }
+        }
+        // Also make lib files executable/accessible
+        let lib_dir = version_dir.join("lib");
+        if let Ok(entries) = fs::read_dir(&lib_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(metadata) = path.metadata() {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        let _ = fs::set_permissions(&path, perms);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("PostgreSQL {} extracted successfully.", pg_version);
+    Ok(version_dir)
+}
+
 /// Get the current platform string for downloads
 fn get_platform() -> Option<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -441,6 +565,7 @@ fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), 
 fn start(
     name: String,
     port: u16,
+    port_was_specified: bool,
     version: String,
     data_dir: Option<String>,
     username: String,
@@ -456,6 +581,15 @@ fn start(
         // Stale instance, clean up
         remove_instance(&name)?;
     }
+
+    // Auto-allocate port if the requested port is in use (only if port wasn't explicitly specified)
+    let port = if !port_was_specified && !is_port_available(port) {
+        let new_port = find_available_port(port);
+        println!("Port {} is in use, using port {} instead.", port, new_port);
+        new_port
+    } else {
+        port
+    };
 
     let base_dir = get_base_dir()?;
     let instance_dir = get_instance_dir(&name)?;
@@ -499,20 +633,43 @@ fn start(
         }
     }
 
-    let settings = Settings {
-        version: version_req,
-        port,
-        username: username.clone(),
-        password: password.clone(),
-        data_dir: data_dir.clone(),
-        installation_dir: installation_dir.clone(),
-        configuration,
-        ..Default::default()
+    // If PostgreSQL is bundled, extract it and use trust_installation_dir
+    // Otherwise, fall back to downloading via postgresql_embedded
+    let (settings, use_bundled) = if is_postgresql_bundled() {
+        // Extract bundled PostgreSQL
+        let version_install_dir = extract_bundled_postgresql(&installation_dir, &version)?;
+
+        let settings = Settings {
+            version: version_req,
+            port,
+            username: username.clone(),
+            password: password.clone(),
+            data_dir: data_dir.clone(),
+            installation_dir: version_install_dir,
+            configuration,
+            trust_installation_dir: true, // Skip download, use our extracted files
+            ..Default::default()
+        };
+        (settings, true)
+    } else {
+        let settings = Settings {
+            version: version_req,
+            port,
+            username: username.clone(),
+            password: password.clone(),
+            data_dir: data_dir.clone(),
+            installation_dir: installation_dir.clone(),
+            configuration,
+            ..Default::default()
+        };
+        (settings, false)
     };
 
     let mut postgresql = PostgreSQL::new(settings);
 
-    println!("Downloading and installing PostgreSQL (this may take a moment on first run)...");
+    if !use_bundled {
+        println!("Downloading and installing PostgreSQL (this may take a moment on first run)...");
+    }
     postgresql.setup()?;
 
     // Install pgvector extension
@@ -1161,7 +1318,11 @@ fn main() {
             password,
             database,
             config,
-        } => start(name, port, version, data_dir, username, password, database, config),
+        } => {
+            let port_was_specified = port.is_some();
+            let port = port.unwrap_or(5432);
+            start(name, port, port_was_specified, version, data_dir, username, password, database, config)
+        }
         Commands::Stop { name } => stop(name),
         Commands::Drop { name, force } => drop_instance(name, force),
         Commands::Info { name, output } => info(name, output),

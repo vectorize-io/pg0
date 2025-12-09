@@ -11,9 +11,20 @@ echo "=================================="
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 INSTALL_SCRIPT="$SCRIPT_DIR/../install.sh"
 
+# Check if PG0_BINARY_PATH is set (local binary to test)
+VOLUME_ARGS=""
+BINARY_ENV=""
+if [ -n "${PG0_BINARY_PATH:-}" ]; then
+    echo "Using local binary: $PG0_BINARY_PATH"
+    VOLUME_ARGS="-v $PG0_BINARY_PATH:/tmp/pg0-binary:ro"
+    BINARY_ENV="-e PG0_BINARY_URL=file:///tmp/pg0-binary"
+fi
+
 docker run --rm --platform=linux/amd64 \
   -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+  $BINARY_ENV \
   -v "$INSTALL_SCRIPT:/tmp/install.sh:ro" \
+  $VOLUME_ARGS \
   python:3.11-slim bash -c '
 set -e
 
@@ -44,6 +55,7 @@ echo "=== Switching to non-root user for pg0 ==="
 su - pguser << EOF
 set -e
 export GITHUB_TOKEN="${GITHUB_TOKEN}"
+export PG0_BINARY_URL="${PG0_BINARY_URL}"
 
 echo "=== Installing pg0 ==="
 bash /usr/local/bin/install.sh
