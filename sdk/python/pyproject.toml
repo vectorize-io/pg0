@@ -22,7 +22,7 @@ classifiers = [
 Homepage = "https://github.com/vectorize-io/pg0"
 Repository = "https://github.com/vectorize-io/pg0"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
 [build-system]

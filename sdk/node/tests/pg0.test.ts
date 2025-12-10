@@ -2,7 +2,6 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import {
   PostgreSQL,
-  Pg0NotRunningError,
   Pg0AlreadyRunningError,
   start,
   stop,
@@ -12,6 +11,7 @@ import {
   stopSync,
   infoSync,
   listInstancesSync,
+  dropSync,
 } from "../src";
 
 // Use unique ports to avoid conflicts
@@ -19,11 +19,8 @@ const TEST_PORT = 15433;
 const TEST_NAME = "node-test";
 
 function cleanup() {
-  try {
-    stopSync(TEST_NAME);
-  } catch (e) {
-    // Ignore if not running
-  }
+  // Drop instance to fully clean up data between tests
+  dropSync(TEST_NAME);
 }
 
 describe("PostgreSQL class", () => {
@@ -154,12 +151,10 @@ describe("PostgreSQL class", () => {
       }
     });
 
-    it("should throw Pg0NotRunningError when stopping non-running instance", async () => {
+    it("should not throw when stopping non-running instance", async () => {
       const pg = new PostgreSQL({ name: TEST_NAME, port: TEST_PORT });
-
-      await assert.rejects(async () => {
-        await pg.stop();
-      }, Pg0NotRunningError);
+      // Should not throw - stop is idempotent
+      await pg.stop();
     });
 
     it("should return running=false for non-running instance", async () => {

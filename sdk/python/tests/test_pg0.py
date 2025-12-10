@@ -2,7 +2,7 @@
 
 import pytest
 import pg0
-from pg0 import Pg0, InstanceInfo, Pg0NotRunningError, Pg0AlreadyRunningError
+from pg0 import Pg0, InstanceInfo, Pg0AlreadyRunningError
 
 
 # Use a unique port to avoid conflicts
@@ -12,20 +12,14 @@ TEST_NAME = "pytest-test"
 
 @pytest.fixture
 def clean_instance():
-    """Ensure test instance is stopped before and after test."""
-    # Cleanup before
-    try:
-        pg0.stop(TEST_NAME)
-    except Pg0NotRunningError:
-        pass
+    """Ensure test instance is dropped before and after test."""
+    # Cleanup before - drop to remove any existing data/config
+    pg0.drop(TEST_NAME)
 
     yield
 
     # Cleanup after
-    try:
-        pg0.stop(TEST_NAME)
-    except Pg0NotRunningError:
-        pass
+    pg0.drop(TEST_NAME)
 
 
 class TestPg0:
@@ -119,12 +113,11 @@ class TestPg0:
         finally:
             pg.stop()
 
-    def test_not_running_error(self, clean_instance):
-        """Test that stopping when not running raises error."""
+    def test_stop_when_not_running(self, clean_instance):
+        """Test that stopping when not running does not raise error."""
         pg = Pg0(name=TEST_NAME, port=TEST_PORT)
-
-        with pytest.raises(Pg0NotRunningError):
-            pg.stop()
+        # Should not raise - stop is idempotent
+        pg.stop()
 
     def test_info_when_not_running(self, clean_instance):
         """Test getting info when not running."""

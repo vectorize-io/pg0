@@ -8,8 +8,8 @@ Automated tests to verify pg0 works correctly across different platforms and dis
 |------|-------|----------|--------------|------|
 | `test_debian_amd64.sh` | python:3.11-slim | linux/amd64 | x86_64 | glibc |
 | `test_debian_arm64.sh` | python:3.11-slim | linux/arm64 | aarch64 | glibc |
-| `test_alpine_amd64.sh` | python:3.11-alpine | linux/amd64 | x86_64 | musl |
-| `test_alpine_arm64.sh` | python:3.11-alpine | linux/arm64 | aarch64 | musl |
+| `test_alpine_amd64.sh` | python:3.12-alpine3.20 | linux/amd64 | x86_64 | musl |
+| `test_alpine_arm64.sh` | python:3.12-alpine3.20 | linux/arm64 | aarch64 | musl |
 
 ## What Each Test Does
 
@@ -55,9 +55,11 @@ chmod +x *.sh
 - ✅ All queries: Success
 
 ### Alpine (musl)
-- ✅ PostgreSQL: Works
-- ⚠️ pgvector: May fail (no musl binaries available yet)
+- ✅ PostgreSQL: Works (requires `icu-libs`, `lz4-libs`, `libxml2` packages and ICU 74 - use Alpine 3.20)
+- ⚠️ pgvector: Fails (no musl binaries available - glibc-only)
 - ✅ Basic queries: Success
+
+**Note:** The PostgreSQL musl binary is built against ICU 74. Alpine 3.22+ uses ICU 76 which is not compatible. Use Alpine 3.20 for musl-based deployments.
 
 ## Requirements
 

@@ -10,12 +10,8 @@ const src_1 = require("../src");
 const TEST_PORT = 15433;
 const TEST_NAME = "node-test";
 function cleanup() {
-    try {
-        (0, src_1.stopSync)(TEST_NAME);
-    }
-    catch (e) {
-        // Ignore if not running
-    }
+    // Drop instance to fully clean up data between tests
+    (0, src_1.dropSync)(TEST_NAME);
 }
 (0, node_test_1.describe)("PostgreSQL class", () => {
     (0, node_test_1.before)(() => cleanup());
@@ -126,11 +122,10 @@ function cleanup() {
                 await pg.stop();
             }
         });
-        (0, node_test_1.it)("should throw Pg0NotRunningError when stopping non-running instance", async () => {
+        (0, node_test_1.it)("should not throw when stopping non-running instance", async () => {
             const pg = new src_1.PostgreSQL({ name: TEST_NAME, port: TEST_PORT });
-            await node_assert_1.default.rejects(async () => {
-                await pg.stop();
-            }, src_1.Pg0NotRunningError);
+            // Should not throw - stop is idempotent
+            await pg.stop();
         });
         (0, node_test_1.it)("should return running=false for non-running instance", async () => {
             const pg = new src_1.PostgreSQL({ name: TEST_NAME, port: TEST_PORT });

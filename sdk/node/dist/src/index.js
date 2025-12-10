@@ -5,6 +5,8 @@ exports.install = install;
 exports.installSync = installSync;
 exports.listInstances = listInstances;
 exports.listInstancesSync = listInstancesSync;
+exports.listExtensions = listExtensions;
+exports.listExtensionsSync = listExtensionsSync;
 exports.start = start;
 exports.startSync = startSync;
 exports.stop = stop;
@@ -63,10 +65,37 @@ function getPlatform() {
         return "darwin-aarch64"; // Intel Macs use Rosetta
     }
     else if (os === "linux") {
+        // Detect architecture
+        let arch_str;
         if (cpu === "x64") {
-            return "linux-x86_64";
+            arch_str = "x86_64";
         }
-        throw new Pg0NotFoundError(`Unsupported Linux architecture: ${cpu}`);
+        else if (cpu === "arm64") {
+            arch_str = "aarch64";
+        }
+        else {
+            throw new Pg0NotFoundError(`Unsupported Linux architecture: ${cpu}`);
+        }
+        // Detect libc (musl vs glibc)
+        // Check for musl by looking for the musl loader
+        const { execSync } = require("child_process");
+        try {
+            const ldd = execSync("ldd --version 2>&1", { encoding: "utf-8" });
+            if (ldd.toLowerCase().includes("musl")) {
+                return `linux-${arch_str}-musl`;
+            }
+        }
+        catch {
+            // If ldd fails, check for musl loader file
+            const { existsSync } = require("fs");
+            if (existsSync(`/lib/ld-musl-${arch_str}.so.1`) ||
+                existsSync(`/lib/ld-musl-x86_64.so.1`) ||
+                existsSync(`/lib/ld-musl-aarch64.so.1`)) {
+                return `linux-${arch_str}-musl`;
+            }
+        }
+        // Default to glibc
+        return `linux-${arch_str}-gnu`;
     }
     else if (os === "win32") {
         return "windows-x86_64";
@@ -427,6 +456,16 @@ async function listInstances() {
 /** List all pg0 instances (synchronous). */
 function listInstancesSync() {
     return JSON.parse(runPg0Sync("list", "-o", "json"));
+}
+/** List available PostgreSQL extensions. */
+async function listExtensions() {
+    const { stdout } = await runPg0("list-extensions");
+    return stdout.trim().split("\n").filter(line => line.trim());
+}
+/** List available PostgreSQL extensions (synchronous). */
+function listExtensionsSync() {
+    const stdout = runPg0Sync("list-extensions");
+    return stdout.trim().split("\n").filter(line => line.trim());
 }
 /** Start a PostgreSQL instance (convenience function). */
 async function start(options = {}) {

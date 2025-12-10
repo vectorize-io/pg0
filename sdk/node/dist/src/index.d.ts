@@ -111,6 +111,10 @@ export declare class Pg0 {
 export declare function listInstances(): Promise<InstanceInfo[]>;
 /** List all pg0 instances (synchronous). */
 export declare function listInstancesSync(): InstanceInfo[];
+/** List available PostgreSQL extensions. */
+export declare function listExtensions(): Promise<string[]>;
+/** List available PostgreSQL extensions (synchronous). */
+export declare function listExtensionsSync(): string[];
 /** Start a PostgreSQL instance (convenience function). */
 export declare function start(options?: Pg0Options): Promise<InstanceInfo>;
 /** Start a PostgreSQL instance (synchronous convenience function). */

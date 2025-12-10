@@ -1,142 +1,73 @@
 # pg0 - Embedded PostgreSQL for Node.js
 
-Zero-config PostgreSQL with pgvector support. Just `npm install` and go.
+[![npm](https://badge.fury.io/js/@vectorize-io%2Fpg0.svg)](https://www.npmjs.com/package/@vectorize-io/pg0)
 
-## Installation
+Embedded PostgreSQL with pgvector. No installation, no Docker, no configuration.
+
+## Install
 
 ```bash
 npm install @vectorize-io/pg0
 ```
 
-## Quick Start
+## Usage
 
 ```typescript
 import { Pg0 } from "@vectorize-io/pg0";
 
-// Start PostgreSQL (auto-installs on first run)
+// Basic usage
 const pg = new Pg0();
 await pg.start();
-
 console.log(await pg.getUri()); // postgresql://postgres:postgres@localhost:5432/postgres
-
+await pg.execute("CREATE EXTENSION IF NOT EXISTS vector");
 await pg.stop();
-```
 
-## Synchronous API
-
-```typescript
-import { Pg0 } from "@vectorize-io/pg0";
-
-const pg = new Pg0();
-pg.startSync();
-console.log(pg.getUriSync());
-pg.stopSync();
-```
-
-## Custom Configuration
-
-```typescript
-import { Pg0 } from "@vectorize-io/pg0";
-
+// Custom configuration
 const pg = new Pg0({
+  name: "myapp",
   port: 5433,
   username: "myuser",
   password: "mypass",
   database: "mydb",
-  config: {
-    shared_buffers: "512MB",
-    maintenance_work_mem: "1GB",
-  },
+  config: { shared_buffers: "512MB" }
 });
-
 await pg.start();
-console.log(await pg.getUri());
 await pg.stop();
+
+// Sync API also available
+pg.startSync();
+pg.stopSync();
 ```
 
-## Multiple Instances
-
-```typescript
-import { Pg0, listInstances } from "@vectorize-io/pg0";
-
-const app = new Pg0({ name: "app", port: 5432 });
-const test = new Pg0({ name: "test", port: 5433 });
-
-await app.start();
-await test.start();
-
-for (const instance of await listInstances()) {
-  console.log(`${instance.name}: ${instance.uri}`);
-}
-
-await app.stop();
-await test.stop();
-```
-
-## API Reference
+## API
 
 ### Pg0 Class
 
-```typescript
-const pg = new Pg0({
-  name: "default",      // Instance name
-  port: 5432,           // Port
-  username: "postgres", // Username
-  password: "postgres", // Password
-  database: "postgres", // Database
-  dataDir: undefined,   // Custom data directory
-  config: {},           // PostgreSQL config options
-});
-
-// Async methods
-await pg.start();       // Start PostgreSQL -> InstanceInfo
-await pg.stop();        // Stop PostgreSQL
-await pg.info();        // Get instance info -> InstanceInfo
-await pg.getUri();      // Connection URI
-await pg.isRunning();   // Is running
-await pg.execute(sql);  // Execute SQL -> string
-
-// Sync methods
-pg.startSync();
-pg.stopSync();
-pg.infoSync();
-pg.getUriSync();
-pg.isRunningSync();
-pg.executeSync(sql);
-```
+| Method | Description |
+|--------|-------------|
+| `start()` / `startSync()` | Start PostgreSQL, returns `InstanceInfo` |
+| `stop()` / `stopSync()` | Stop PostgreSQL |
+| `drop()` / `dropSync()` | Stop and delete all data |
+| `info()` / `infoSync()` | Get instance info |
+| `execute(sql)` / `executeSync(sql)` | Run SQL query |
+| `getUri()` / `getUriSync()` | Get connection URI |
+| `isRunning()` / `isRunningSync()` | Check if running |
 
 ### Module Functions
 
 ```typescript
-import { start, stop, info, listInstances, install } from "@vectorize-io/pg0";
+import { start, stop, drop, info, listInstances } from "@vectorize-io/pg0";
 
-// Async
-await start({ port: 5432 });  // Start -> InstanceInfo
-await stop("default");        // Stop
-await info("default");        // Info -> InstanceInfo
-await listInstances();        // List all -> InstanceInfo[]
-await install();              // Install pg0 binary
+await start({ name: "default", port: 5432 });  // Start instance
+await stop("default");                          // Stop instance
+await drop("default");                          // Delete instance
+await info("default");                          // Get instance info
+await listInstances();                          // List all instances
 
-// Sync
-startSync({ port: 5432 });
-stopSync("default");
-infoSync("default");
-listInstancesSync();
-installSync();
+// Sync versions: startSync, stopSync, dropSync, infoSync, listInstancesSync
 ```
 
-### InstanceInfo
+## Links
 
-```typescript
-interface InstanceInfo {
-  name: string;
-  running: boolean;
-  pid?: number;
-  port?: number;
-  version?: string;
-  username?: string;
-  database?: string;
-  data_dir?: string;
-  uri?: string;
-}
-```
+- [GitHub](https://github.com/vectorize-io/pg0)
+- [CLI Documentation](https://github.com/vectorize-io/pg0#readme)

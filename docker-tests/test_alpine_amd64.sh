@@ -3,7 +3,7 @@ set -e
 
 echo "=================================="
 echo "Testing pg0 on Alpine AMD64"
-echo "Image: python:3.11-alpine"
+echo "Image: python:3.12-alpine3.20"
 echo "Platform: linux/amd64"
 echo "=================================="
 
@@ -11,9 +11,11 @@ echo "=================================="
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 INSTALL_SCRIPT="$SCRIPT_DIR/../install.sh"
 
+# Note: Using Alpine 3.20 because the musl PostgreSQL binary requires ICU 74
+# Alpine 3.22 has ICU 76 which is not compatible
 docker run --rm --platform=linux/amd64 \
   -v "$INSTALL_SCRIPT:/tmp/install.sh:ro" \
-  python:3.11-alpine sh -c '
+  python:3.12-alpine3.20 sh -c '
 set -e
 
 echo "=== System Info ==="
@@ -22,7 +24,7 @@ cat /etc/os-release | grep PRETTY_NAME
 
 echo ""
 echo "=== Installing dependencies ==="
-apk add --no-cache curl bash sudo procps shadow > /dev/null 2>&1
+apk add --no-cache curl bash sudo procps shadow icu-libs lz4-libs libxml2 > /dev/null 2>&1
 
 echo ""
 echo "=== Creating non-root user ==="

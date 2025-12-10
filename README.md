@@ -22,6 +22,17 @@ pg0 gives you **real PostgreSQL** with the same simplicity as SQLite:
 
 Use pg0 for local development, testing, CI/CD pipelines, or any scenario where you want PostgreSQL without the setup overhead.
 
+## Supported Platforms
+
+| Platform | Architecture | Binary |
+|----------|--------------|--------|
+| macOS | Apple Silicon (M1/M2/M3) | `pg0-macos-arm64` |
+| Linux | x86_64 (glibc) | `pg0-linux-amd64-gnu` |
+| Linux | x86_64 (musl/Alpine) | `pg0-linux-amd64-musl` |
+| Linux | ARM64 (glibc) | `pg0-linux-arm64-gnu` |
+| Linux | ARM64 (musl/Alpine) | `pg0-linux-arm64-musl` |
+| Windows | x64 | `pg0-windows-amd64.exe` |
+
 ## Features
 
 - **Zero dependencies** - single binary, works offline
@@ -141,12 +152,14 @@ docker run -d myimage bash -c "pg0 start && exec your-application"
 
 ### Alpine (musl-based)
 
+**Note:** The musl binary requires ICU 74. Use Alpine 3.20 (not 3.22+) as newer versions have ICU 76.
+
 ```dockerfile
-FROM alpine:latest
-# or: python:3.11-alpine
+FROM alpine:3.20
+# or: python:3.12-alpine3.20
 
 # Install required dependencies
-RUN apk add --no-cache curl bash shadow
+RUN apk add --no-cache curl bash shadow icu-libs lz4-libs libxml2
 
 # Create non-root user (PostgreSQL cannot run as root)
 RUN adduser -D -s /bin/bash pguser
@@ -183,9 +196,9 @@ docker run --rm -it python:3.11-slim bash -c '
     pg0 psql -c \"SELECT version();\""
 '
 
-# Alpine
-docker run --rm -it python:3.11-alpine sh -c '
-  apk add --no-cache curl bash shadow &&
+# Alpine (use 3.20 for ICU 74 compatibility)
+docker run --rm -it python:3.12-alpine3.20 sh -c '
+  apk add --no-cache curl bash shadow icu-libs lz4-libs libxml2 &&
   adduser -D pguser &&
   su - pguser -c "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash &&
     export PATH=\"\$HOME/.local/bin:\$PATH\" &&

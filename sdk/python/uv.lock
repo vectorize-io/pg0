@@ -64,11 +64,11 @@ wheels = [
 ]
 
 [[package]]
-name = "pg0"
-version = "0.1.0"
+name = "pg0-embedded"
+version = "0.1.1"
 source = { editable = "." }
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
@@ -76,9 +76,8 @@ dev = [
 ]
 
 [package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.0.0" }]
+requires-dist = [{ name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" }]
+provides-extras = ["dev"]
 
 [[package]]
 name = "pluggy"
