@@ -12,8 +12,7 @@ show_usage() {
     echo "Usage: ./release.sh <component> <version>"
     echo ""
     echo "Components:"
-    echo "  cli     - Rust CLI (tag: v*)"
-    echo "  py      - Python client (tag: py-*)"
+    echo "  cli     - CLI + Python package (tag: v*)"
     echo "  node    - Node.js client (tag: node-*)"
     echo ""
     echo "Version:"
@@ -25,10 +24,10 @@ show_usage() {
     echo "Examples:"
     echo "  ./release.sh cli 0.1.0"
     echo "  ./release.sh cli patch"
-    echo "  ./release.sh py 0.1.0"
-    echo "  ./release.sh py minor"
     echo "  ./release.sh node 1.0.0"
     echo "  ./release.sh node patch"
+    echo ""
+    echo "Note: 'cli' releases both the CLI binaries and Python package together"
 }
 
 get_cli_version() {
@@ -94,14 +93,16 @@ check_tag_exists() {
 
 release_cli() {
     local version=$1
-    local current=$(get_cli_version)
+    local current_cli=$(get_cli_version)
+    local current_py=$(get_py_version)
 
-    echo -e "${BLUE}CLI Release${NC}"
-    echo "Current version: $current"
+    echo -e "${BLUE}CLI + Python Release${NC}"
+    echo "Current CLI version: $current_cli"
+    echo "Current Python version: $current_py"
 
-    # Handle version bump
+    # Handle version bump (based on CLI version)
     if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
-        version=$(bump_version "$current" "$version")
+        version=$(bump_version "$current_cli" "$version")
     fi
 
     validate_version "$version"
@@ -110,44 +111,12 @@ release_cli() {
     check_clean_git
     check_tag_exists "$tag"
 
-    echo -e "${YELLOW}Preparing CLI release $tag${NC}"
+    echo -e "${YELLOW}Preparing release $tag (CLI + Python)${NC}"
 
     # Update version in Cargo.toml
     echo "Updating Cargo.toml version to $version..."
     sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml
     rm -f Cargo.toml.bak
-
-    # Commit and tag
-    git add Cargo.toml
-    git commit -m "chore: bump CLI version to $version"
-    git tag -a "$tag" -m "CLI Release $version"
-
-    # Push
-    git push
-    git push origin "$tag"
-
-    echo -e "${GREEN}CLI release $tag pushed!${NC}"
-}
-
-release_py() {
-    local version=$1
-    local current=$(get_py_version)
-
-    echo -e "${BLUE}Python Release${NC}"
-    echo "Current version: $current"
-
-    # Handle version bump
-    if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
-        version=$(bump_version "$current" "$version")
-    fi
-
-    validate_version "$version"
-    local tag="py-$version"
-
-    check_clean_git
-    check_tag_exists "$tag"
-
-    echo -e "${YELLOW}Preparing Python release $tag${NC}"
 
     # Update version in pyproject.toml
     echo "Updating pyproject.toml version to $version..."
@@ -155,16 +124,19 @@ release_py() {
     rm -f sdk/python/pyproject.toml.bak
 
     # Commit and tag
-    git add sdk/python/pyproject.toml
-    git commit -m "chore: bump Python client version to $version"
-    git tag -a "$tag" -m "Python Client Release $version"
+    git add Cargo.toml sdk/python/pyproject.toml
+    git commit -m "chore: bump CLI version to $version"
+    git tag -a "$tag" -m "Release $version"
 
     # Push
     git push
     git push origin "$tag"
 
-    echo -e "${GREEN}Python release $tag pushed!${NC}"
-    echo "Package will be published to PyPI as: pg0-embedded"
+    echo -e "${GREEN}Release $tag pushed!${NC}"
+    echo ""
+    echo "This will release:"
+    echo "  - CLI binaries to GitHub Releases"
+    echo "  - Python package to PyPI (pg0-embedded)"
 }
 
 release_node() {
@@ -218,9 +190,6 @@ VERSION=$2
 case $COMPONENT in
     cli)
         release_cli "$VERSION"
-        ;;
-    py|python)
-        release_py "$VERSION"
         ;;
     node|nodejs)
         release_node "$VERSION"
