@@ -4,15 +4,13 @@
 [![PyPI downloads](https://img.shields.io/pypi/dm/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 
-**Language-agnostic embedded PostgreSQL with zero dependencies.**
+**Zero-config PostgreSQL with pgvector.**
 
 A single binary that runs PostgreSQL locally - no installation, no configuration, no Docker required. Includes **pgvector** for AI/vector workloads out of the box.
 
 ## Why pg0?
 
-**Stop compromising on SQLite.** When building applications that need a database, developers often choose SQLite for simplicity - but then face painful migrations when they need PostgreSQL features in production.
-
-pg0 gives you **real PostgreSQL** with the same simplicity as SQLite:
+PostgreSQL setup is painful. Docker adds complexity. Local installs conflict with system packages. pg0 gives you a real PostgreSQL server with zero friction:
 
 - **No installation** - download a single binary and run `pg0 start`
 - **No Docker** - no containers, no daemon, no complexity
@@ -425,6 +423,36 @@ pg0 start -c shared_buffers=1GB -c maintenance_work_mem=2GB
 PostgreSQL and pgvector are **bundled directly** into the pg0 binary - no downloads required, works completely offline! On first start, pg0 extracts PostgreSQL and pgvector to `~/.pg0/installation/` and initializes the database.
 
 Data is stored in `~/.pg0/instances/<name>/data/` (or your custom `--data-dir`) and persists between restarts.
+
+## Runtime Dependencies
+
+pg0 bundles PostgreSQL but requires some shared libraries at runtime. These are typically pre-installed on most systems, but may need to be added in minimal environments like Docker.
+
+**macOS:** No additional dependencies required.
+
+**Linux (Debian/Ubuntu):**
+```bash
+apt-get install libxml2 libssl3 libgssapi-krb5-2
+```
+
+**Linux (Alpine):**
+```bash
+apk add icu-libs lz4-libs libxml2
+```
+
+### Why these dependencies?
+
+The bundled PostgreSQL binaries are compiled with these features enabled:
+
+| Library | Purpose | Can disable? |
+|---------|---------|--------------|
+| OpenSSL (`libssl`) | SSL/TLS connections | Not recommended |
+| GSSAPI (`libgssapi-krb5`) | Kerberos authentication | Rarely needed locally |
+| libxml2 | XML data type and functions | Rarely needed |
+| ICU (`icu-libs`) | Unicode collation (Alpine only) | glibc builds don't need it |
+| LZ4 (`lz4-libs`) | WAL/TOAST compression | Small impact |
+
+Most desktop Linux distributions and macOS have these libraries pre-installed. You only need to install them manually in minimal Docker images or bare-metal servers.
 
 ## Troubleshooting
 

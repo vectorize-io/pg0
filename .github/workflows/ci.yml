@@ -91,7 +91,7 @@ jobs:
           npm test
 
   docker-tests:
-    name: Docker Tests (${{ matrix.platform }})
+    name: Docker Tests - CLI (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -123,3 +123,45 @@ jobs:
         run: |
           chmod +x ${{ matrix.script }}
           bash ${{ matrix.script }}
+
+  docker-tests-python:
+    name: Docker Tests - Python SDK (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: debian-amd64
+            runner: ubuntu-latest
+            script: docker-tests/python/test_debian_amd64.sh
+          - platform: debian-arm64
+            runner: ubuntu-latest
+            script: docker-tests/python/test_debian_arm64.sh
+          - platform: alpine-amd64
+            runner: ubuntu-latest
+            script: docker-tests/python/test_alpine_amd64.sh
+          - platform: alpine-arm64
+            runner: ubuntu-latest
+            script: docker-tests/python/test_alpine_arm64.sh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for ARM64 emulation)
+        if: contains(matrix.platform, 'arm64')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Run Docker test
+        run: |
+          chmod +x ${{ matrix.script }}
+          bash ${{ matrix.script }}
+
+  # Build Python wheels to verify the build process works
+  python-wheels:
+    name: Build Python Wheels
+    uses: ./.github/workflows/build-python-wheels.yml
+    with:
+      upload-artifacts: false
+      test-wheels: true

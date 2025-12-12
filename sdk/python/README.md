@@ -1,8 +1,8 @@
-# pg0 - Embedded PostgreSQL for Python
+# pg0 - PostgreSQL for Python
 
 [![PyPI](https://badge.fury.io/py/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 
-Embedded PostgreSQL with pgvector. No installation, no Docker, no configuration.
+Zero-config PostgreSQL with pgvector. No installation, no Docker, no configuration.
 
 ## Install
 
