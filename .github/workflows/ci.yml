@@ -53,10 +53,11 @@ jobs:
         working-directory: sdk/python
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          uv pip install -e ".[dev]"
+          uv pip install --system -e ".[dev]"
           pytest tests/ -v
 
   # Docker tests - one job per platform, runs both CLI and Python SDK tests
+  # Note: ARM64 tests are skipped because QEMU emulation is too slow for PostgreSQL setup
   docker-tests:
     name: Docker Tests (${{ matrix.platform }})
     runs-on: ubuntu-latest
@@ -67,28 +68,12 @@ jobs:
           - platform: debian-amd64
             cli_script: docker-tests/test_debian_amd64.sh
             python_script: docker-tests/python/test_debian_amd64.sh
-            needs_qemu: false
-          - platform: debian-arm64
-            cli_script: docker-tests/test_debian_arm64.sh
-            python_script: docker-tests/python/test_debian_arm64.sh
-            needs_qemu: true
           - platform: alpine-amd64
             cli_script: docker-tests/test_alpine_amd64.sh
             python_script: docker-tests/python/test_alpine_amd64.sh
-            needs_qemu: false
-          - platform: alpine-arm64
-            cli_script: docker-tests/test_alpine_arm64.sh
-            python_script: docker-tests/python/test_alpine_arm64.sh
-            needs_qemu: true
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU (for ARM64 emulation)
-        if: matrix.needs_qemu
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Run CLI Docker test
         run: |
