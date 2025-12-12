@@ -26,34 +26,49 @@ jobs:
           - os: macos-14
             platform: darwin-aarch64
             wheel_platform: macosx_14_0_arm64
+            rust_target: aarch64-apple-darwin
 
           # Linux x86_64 glibc
           - os: ubuntu-22.04
             platform: linux-x86_64-gnu
             wheel_platform: manylinux_2_35_x86_64
-
-          # Linux x86_64 musl
-          - os: ubuntu-22.04
-            platform: linux-x86_64-musl
-            wheel_platform: musllinux_1_2_x86_64
+            rust_target: x86_64-unknown-linux-gnu
 
           # Linux ARM64 glibc
           - os: ubuntu-22.04-arm
             platform: linux-aarch64-gnu
             wheel_platform: manylinux_2_35_aarch64
-
-          # Linux ARM64 musl
-          - os: ubuntu-22.04-arm
-            platform: linux-aarch64-musl
-            wheel_platform: musllinux_1_2_aarch64
+            rust_target: aarch64-unknown-linux-gnu
 
           # Windows x64
           - os: windows-latest
             platform: windows-x86_64
             wheel_platform: win_amd64
+            rust_target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build pg0 CLI (Unix)
+        if: runner.os != 'Windows'
+        env:
+          BUNDLE_POSTGRESQL: "true"
+        run: |
+          cargo build --release --target ${{ matrix.rust_target }}
+          ls -la target/${{ matrix.rust_target }}/release/pg0*
+
+      - name: Build pg0 CLI (Windows)
+        if: runner.os == 'Windows'
+        env:
+          BUNDLE_POSTGRESQL: "true"
+        run: |
+          cargo build --release --target ${{ matrix.rust_target }}
+          dir target\${{ matrix.rust_target }}\release\pg0*
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -63,19 +78,24 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Build wheel
+      - name: Build wheel (Unix)
+        if: runner.os != 'Windows'
         working-directory: sdk/python
         env:
-          PG0_TARGET_PLATFORM: ${{ matrix.platform }}
-        run: |
-          uv build --wheel
-        shell: bash
+          PG0_BINARY_PATH: ${{ github.workspace }}/target/${{ matrix.rust_target }}/release/pg0
+        run: uv build --wheel
+
+      - name: Build wheel (Windows)
+        if: runner.os == 'Windows'
+        working-directory: sdk/python
+        env:
+          PG0_BINARY_PATH: ${{ github.workspace }}\target\${{ matrix.rust_target }}\release\pg0.exe
+        run: uv build --wheel
 
       - name: Rename wheel to platform-specific
         working-directory: sdk/python/dist
         run: |
           for f in *.whl; do
-            # Replace py3-none-any with platform-specific tag
             newname=$(echo "$f" | sed 's/py3-none-any/py3-none-${{ matrix.wheel_platform }}/g')
             if [ "$f" != "$newname" ]; then
               echo "Renaming $f -> $newname"
@@ -85,16 +105,14 @@ jobs:
           ls -la
         shell: bash
 
-      - name: Test wheel
-        if: inputs.test-wheels && matrix.platform == 'darwin-aarch64' || matrix.platform == 'linux-x86_64-gnu'
+      - name: Test wheel (Unix)
+        if: inputs.test-wheels && runner.os != 'Windows'
         working-directory: sdk/python
         run: |
-          # Install the wheel in a fresh environment
           uv venv test-env
-          source test-env/bin/activate || test-env/Scripts/activate
+          source test-env/bin/activate
           pip install dist/*.whl
 
-          # Test that bundled binary is found
           python -c "
           from pg0 import _get_bundled_binary, Pg0
           bundled = _get_bundled_binary()
@@ -102,7 +120,6 @@ jobs:
           assert bundled.exists(), f'Bundled binary does not exist: {bundled}'
           print(f'Bundled binary found: {bundled}')
 
-          # Quick smoke test
           pg = Pg0(name='wheel-test')
           info = pg.start()
           print(f'Started PostgreSQL: {info.uri}')
@@ -110,7 +127,30 @@ jobs:
           pg.drop()
           print('Wheel test passed!')
           "
-        shell: bash
+
+      - name: Test wheel (Windows)
+        if: inputs.test-wheels && runner.os == 'Windows'
+        working-directory: sdk/python
+        run: |
+          uv venv test-env
+          test-env\Scripts\activate
+          pip install (Get-ChildItem dist\*.whl).FullName
+
+          python -c "
+          from pg0 import _get_bundled_binary, Pg0
+          bundled = _get_bundled_binary()
+          assert bundled is not None, 'Bundled binary not found!'
+          assert bundled.exists(), f'Bundled binary does not exist: {bundled}'
+          print(f'Bundled binary found: {bundled}')
+
+          pg = Pg0(name='wheel-test')
+          info = pg.start()
+          print(f'Started PostgreSQL: {info.uri}')
+          pg.stop()
+          pg.drop()
+          print('Wheel test passed!')
+          "
+        shell: pwsh
 
       - name: Upload wheel artifact
         if: inputs.upload-artifacts

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-cli:
@@ -103,8 +104,123 @@ jobs:
           name: cli-${{ matrix.name }}
           path: pg0-${{ matrix.name }}.exe
 
+  build-python-wheels:
+    name: Build Python wheel (${{ matrix.platform }})
+    needs: build-cli
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS Apple Silicon - reuse darwin-aarch64 CLI
+          - os: macos-14
+            platform: darwin-aarch64
+            wheel_platform: macosx_14_0_arm64
+            cli_artifact: cli-darwin-aarch64
+            cli_binary: pg0-darwin-aarch64
+
+          # Linux x86_64 glibc - reuse linux-x86_64-gnu CLI
+          - os: ubuntu-22.04
+            platform: linux-x86_64-gnu
+            wheel_platform: manylinux_2_35_x86_64
+            cli_artifact: cli-linux-x86_64-gnu
+            cli_binary: pg0-linux-x86_64-gnu
+
+          # Linux ARM64 glibc - reuse linux-aarch64-gnu CLI
+          - os: ubuntu-22.04-arm
+            platform: linux-aarch64-gnu
+            wheel_platform: manylinux_2_35_aarch64
+            cli_artifact: cli-linux-aarch64-gnu
+            cli_binary: pg0-linux-aarch64-gnu
+
+          # Windows x64 - reuse windows-x86_64 CLI
+          - os: windows-latest
+            platform: windows-x86_64
+            wheel_platform: win_amd64
+            cli_artifact: cli-windows-x86_64
+            cli_binary: pg0-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.cli_artifact }}
+          path: cli-bin
+
+      - name: Prepare CLI binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x cli-bin/${{ matrix.cli_binary }}
+          ls -la cli-bin/
+
+      - name: Prepare CLI binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          dir cli-bin\
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build wheel
+        working-directory: sdk/python
+        env:
+          PG0_BINARY_PATH: ${{ github.workspace }}/cli-bin/${{ matrix.cli_binary }}
+        run: |
+          uv build --wheel
+        shell: bash
+
+      - name: Rename wheel to platform-specific
+        working-directory: sdk/python/dist
+        run: |
+          for f in *.whl; do
+            newname=$(echo "$f" | sed 's/py3-none-any/py3-none-${{ matrix.wheel_platform }}/g')
+            if [ "$f" != "$newname" ]; then
+              echo "Renaming $f -> $newname"
+              mv "$f" "$newname"
+            fi
+          done
+          ls -la
+        shell: bash
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: sdk/python/dist/*.whl
+
+  build-python-sdist:
+    name: Build Python sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build sdist
+        working-directory: sdk/python
+        run: uv build --sdist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: sdk/python/dist/*.tar.gz
+
   release:
-    needs: [build-cli]
+    name: Create GitHub Release
+    needs: [build-cli, build-python-wheels, build-python-sdist]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +240,12 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir release
-          find artifacts -type f -exec mv {} release/ \;
+          # CLI binaries
+          find artifacts/cli-* -type f -exec mv {} release/ \;
+          # Python wheels
+          find artifacts/wheel-* -type f -exec mv {} release/ \;
+          # Python sdist
+          find artifacts/python-sdist -type f -exec mv {} release/ \;
           ls -la release/
 
       - name: Create Release
@@ -133,23 +254,64 @@ jobs:
           PG_VERSION: ${{ steps.versions.outputs.PG_VERSION }}
           PGVECTOR_VERSION: ${{ steps.versions.outputs.PGVECTOR_VERSION }}
         run: |
-          echo "## pg0 - Embedded PostgreSQL CLI" > release_notes.md
-          echo "" >> release_notes.md
-          echo "### CLI Binaries" >> release_notes.md
-          echo "- \`pg0-darwin-aarch64\` - macOS Apple Silicon" >> release_notes.md
-          echo "- \`pg0-linux-x86_64-gnu\` - Linux x86_64 for Debian/Ubuntu (glibc)" >> release_notes.md
-          echo "- \`pg0-linux-x86_64-musl\` - Linux x86_64 for Alpine (musl, statically linked)" >> release_notes.md
-          echo "- \`pg0-linux-aarch64-gnu\` - Linux ARM64 for Debian/Ubuntu (glibc)" >> release_notes.md
-          echo "- \`pg0-linux-aarch64-musl\` - Linux ARM64 for Alpine (musl, statically linked)" >> release_notes.md
-          echo "- \`pg0-windows-x86_64.exe\` - Windows x64" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "### Bundled Components" >> release_notes.md
-          echo "Everything is bundled directly in the binary - no downloads required, works completely offline!" >> release_notes.md
+          cat > release_notes.md << 'EOF'
+          ## pg0 - Embedded PostgreSQL CLI
+
+          ### CLI Binaries
+          - `pg0-darwin-aarch64` - macOS Apple Silicon
+          - `pg0-linux-x86_64-gnu` - Linux x86_64 for Debian/Ubuntu (glibc)
+          - `pg0-linux-x86_64-musl` - Linux x86_64 for Alpine (musl, statically linked)
+          - `pg0-linux-aarch64-gnu` - Linux ARM64 for Debian/Ubuntu (glibc)
+          - `pg0-linux-aarch64-musl` - Linux ARM64 for Alpine (musl, statically linked)
+          - `pg0-windows-x86_64.exe` - Windows x64
+
+          ### Python Package
+          Install from PyPI:
+          ```bash
+          pip install pg0-embedded
+          ```
+
+          Pre-built wheels available for:
+          - macOS Apple Silicon (`macosx_14_0_arm64`)
+          - Linux x86_64 glibc (`manylinux_2_35_x86_64`)
+          - Linux ARM64 glibc (`manylinux_2_35_aarch64`)
+          - Windows x64 (`win_amd64`)
+
+          ### Bundled Components
+          Everything is bundled directly in the binary - no downloads required, works completely offline!
+          EOF
           echo "- PostgreSQL ${PG_VERSION}" >> release_notes.md
           echo "- pgvector ${PGVECTOR_VERSION}" >> release_notes.md
           echo "" >> release_notes.md
           echo "### Installation (macOS/Linux)" >> release_notes.md
-          echo "\`\`\`bash" >> release_notes.md
+          echo '```bash' >> release_notes.md
           echo "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash" >> release_notes.md
-          echo "\`\`\`" >> release_notes.md
+          echo '```' >> release_notes.md
+
           gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md release/*
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-python-wheels, build-python-sdist, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-sdist
+          path: dist
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
