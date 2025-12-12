@@ -176,7 +176,5 @@ class CustomBuildHook(BuildHookInterface):
         else:
             build_binary_locally(bin_dir)
 
-        # Tell hatch to include the bin directory
-        if "force_include" not in build_data:
-            build_data["force_include"] = {}
-        build_data["force_include"][str(bin_dir)] = "pg0/bin"
+        # Note: The binary is included via artifacts = ["pg0/bin/*"] in pyproject.toml
+        # No need to use force_include here
