@@ -38,16 +38,15 @@ export interface Pg0Options {
     config?: Record<string, string>;
 }
 /**
- * Install the pg0 binary.
- * @param version Version to install (default: latest)
+ * Install the pg0 binary using the official install script.
  * @param force Force reinstall even if already installed
  * @returns Path to installed binary
  */
-export declare function install(version?: string, force?: boolean): Promise<string>;
+export declare function install(force?: boolean): Promise<string>;
 /**
- * Install the pg0 binary synchronously.
+ * Install the pg0 binary synchronously using the official install script.
  */
-export declare function installSync(version?: string, force?: boolean): string;
+export declare function installSync(force?: boolean): string;
 /**
  * Embedded PostgreSQL instance.
  *

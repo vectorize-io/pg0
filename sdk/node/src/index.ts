@@ -1,13 +1,13 @@
-import { execFile, execFileSync } from "child_process";
-import { createWriteStream, chmodSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
-import { get } from "https";
-import { homedir, platform, arch } from "os";
+import { execFile, execFileSync, execSync } from "child_process";
+import { chmodSync, existsSync, mkdirSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
 const PG0_REPO = "vectorize-io/pg0";
+const INSTALL_SCRIPT_URL = `https://raw.githubusercontent.com/${PG0_REPO}/main/install.sh`;
 
 export class Pg0Error extends Error {
   constructor(message: string) {
@@ -74,112 +74,12 @@ function getInstallDir(): string {
   return join(homedir(), ".local", "bin");
 }
 
-function getPlatform(): string {
-  const os = platform();
-  const cpu = arch();
-
-  if (os === "darwin") {
-    return "darwin-aarch64"; // Intel Macs use Rosetta
-  } else if (os === "linux") {
-    // Detect architecture
-    let arch_str: string;
-    if (cpu === "x64") {
-      arch_str = "x86_64";
-    } else if (cpu === "arm64") {
-      arch_str = "aarch64";
-    } else {
-      throw new Pg0NotFoundError(`Unsupported Linux architecture: ${cpu}`);
-    }
-
-    // Detect libc (musl vs glibc)
-    // Check for musl by looking for the musl loader
-    const { execSync } = require("child_process");
-    try {
-      const ldd = execSync("ldd --version 2>&1", { encoding: "utf-8" });
-      if (ldd.toLowerCase().includes("musl")) {
-        return `linux-${arch_str}-musl`;
-      }
-    } catch {
-      // If ldd fails, check for musl loader file
-      const { existsSync } = require("fs");
-      if (
-        existsSync(`/lib/ld-musl-${arch_str}.so.1`) ||
-        existsSync(`/lib/ld-musl-x86_64.so.1`) ||
-        existsSync(`/lib/ld-musl-aarch64.so.1`)
-      ) {
-        return `linux-${arch_str}-musl`;
-      }
-    }
-    // Default to glibc
-    return `linux-${arch_str}-gnu`;
-  } else if (os === "win32") {
-    return "windows-x86_64";
-  }
-  throw new Pg0NotFoundError(`Unsupported platform: ${os}`);
-}
-
-async function getLatestVersion(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = `https://api.github.com/repos/${PG0_REPO}/releases/latest`;
-    get(url, { headers: { "User-Agent": "pg0-node" } }, (res) => {
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        get(res.headers.location!, { headers: { "User-Agent": "pg0-node" } }, handleResponse);
-        return;
-      }
-      handleResponse(res);
-
-      function handleResponse(response: typeof res) {
-        let data = "";
-        response.on("data", (chunk) => (data += chunk));
-        response.on("end", () => {
-          try {
-            const json = JSON.parse(data);
-            resolve(json.tag_name);
-          } catch (e) {
-            reject(new Pg0NotFoundError(`Failed to parse version: ${e}`));
-          }
-        });
-      }
-    }).on("error", (e) => reject(new Pg0NotFoundError(`Failed to fetch version: ${e}`)));
-  });
-}
-
-function downloadFile(url: string, dest: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const file = createWriteStream(dest);
-
-    function doDownload(downloadUrl: string) {
-      get(downloadUrl, { headers: { "User-Agent": "pg0-node" } }, (res) => {
-        if (res.statusCode === 302 || res.statusCode === 301) {
-          doDownload(res.headers.location!);
-          return;
-        }
-        if (res.statusCode !== 200) {
-          reject(new Pg0NotFoundError(`Download failed: ${res.statusCode}`));
-          return;
-        }
-        res.pipe(file);
-        file.on("finish", () => {
-          file.close();
-          resolve();
-        });
-      }).on("error", (e) => {
-        unlinkSync(dest);
-        reject(new Pg0NotFoundError(`Download failed: ${e}`));
-      });
-    }
-
-    doDownload(url);
-  });
-}
-
 /**
- * Install the pg0 binary.
- * @param version Version to install (default: latest)
+ * Install the pg0 binary using the official install script.
  * @param force Force reinstall even if already installed
  * @returns Path to installed binary
  */
-export async function install(version?: string, force: boolean = false): Promise<string> {
+export async function install(force: boolean = false): Promise<string> {
   const installDir = getInstallDir();
   const binaryName = process.platform === "win32" ? "pg0.exe" : "pg0";
   const binaryPath = join(installDir, binaryName);
@@ -188,36 +88,57 @@ export async function install(version?: string, force: boolean = false): Promise
     return binaryPath;
   }
 
-  if (!version) {
-    version = await getLatestVersion();
+  // Use the official install script which handles:
+  // - Platform detection (including old glibc fallback to musl)
+  // - Intel Mac Rosetta handling
+  // - Proper binary naming
+  if (process.platform === "win32") {
+    throw new Pg0NotFoundError(
+      "Auto-install not supported on Windows. " +
+      "Please download pg0 manually from https://github.com/vectorize-io/pg0/releases"
+    );
   }
 
-  const plat = getPlatform();
-  const ext = process.platform === "win32" ? ".exe" : "";
-  const filename = `pg0-${plat}${ext}`;
-  const url = `https://github.com/${PG0_REPO}/releases/download/${version}/${filename}`;
+  console.log("Installing pg0 using official install script...");
 
-  console.log(`Installing pg0 ${version}...`);
+  return new Promise((resolve, reject) => {
+    const { exec } = require("child_process");
+    exec(
+      `curl -fsSL ${INSTALL_SCRIPT_URL} | bash`,
+      { timeout: 120000 },
+      (error: Error | null, stdout: string, stderr: string) => {
+        if (error) {
+          reject(new Pg0NotFoundError(`Install script failed: ${stderr || error.message}`));
+          return;
+        }
 
-  mkdirSync(installDir, { recursive: true });
+        // Verify installation
+        if (existsSync(binaryPath)) {
+          resolve(binaryPath);
+          return;
+        }
 
-  const tmpPath = join(installDir, `pg0.tmp${ext}`);
-  await downloadFile(url, tmpPath);
+        // Check if installed to a different location via PATH
+        try {
+          const which = execSync("which pg0", { encoding: "utf-8" }).trim();
+          if (which) {
+            resolve(which);
+            return;
+          }
+        } catch {
+          // Not in PATH
+        }
 
-  renameSync(tmpPath, binaryPath);
-
-  if (process.platform !== "win32") {
-    chmodSync(binaryPath, 0o755);
-  }
-
-  console.log(`Installed pg0 to ${binaryPath}`);
-  return binaryPath;
+        reject(new Pg0NotFoundError("Install script succeeded but pg0 binary not found"));
+      }
+    );
+  });
 }
 
 /**
- * Install the pg0 binary synchronously.
+ * Install the pg0 binary synchronously using the official install script.
  */
-export function installSync(version?: string, force: boolean = false): string {
+export function installSync(force: boolean = false): string {
   const installDir = getInstallDir();
   const binaryName = process.platform === "win32" ? "pg0.exe" : "pg0";
   const binaryPath = join(installDir, binaryName);
@@ -226,39 +147,41 @@ export function installSync(version?: string, force: boolean = false): string {
     return binaryPath;
   }
 
-  // For sync, we use execSync to call curl
-  const { execSync } = require("child_process");
-
-  if (!version) {
-    try {
-      const result = execSync(
-        `curl -sL https://api.github.com/repos/${PG0_REPO}/releases/latest`,
-        { encoding: "utf-8" }
-      );
-      version = JSON.parse(result).tag_name;
-    } catch (e) {
-      throw new Pg0NotFoundError(`Failed to fetch version: ${e}`);
-    }
+  // Use the official install script
+  if (process.platform === "win32") {
+    throw new Pg0NotFoundError(
+      "Auto-install not supported on Windows. " +
+      "Please download pg0 manually from https://github.com/vectorize-io/pg0/releases"
+    );
   }
 
-  const plat = getPlatform();
-  const ext = process.platform === "win32" ? ".exe" : "";
-  const filename = `pg0-${plat}${ext}`;
-  const url = `https://github.com/${PG0_REPO}/releases/download/${version}/${filename}`;
-
-  console.log(`Installing pg0 ${version}...`);
-
-  mkdirSync(installDir, { recursive: true });
+  console.log("Installing pg0 using official install script...");
 
   try {
-    execSync(`curl -fsSL "${url}" -o "${binaryPath}"`, { encoding: "utf-8" });
-    if (process.platform !== "win32") {
-      chmodSync(binaryPath, 0o755);
+    execSync(`curl -fsSL ${INSTALL_SCRIPT_URL} | bash`, {
+      encoding: "utf-8",
+      timeout: 120000,
+    });
+
+    // Verify installation
+    if (existsSync(binaryPath)) {
+      return binaryPath;
     }
-    console.log(`Installed pg0 to ${binaryPath}`);
-    return binaryPath;
-  } catch (e) {
-    throw new Pg0NotFoundError(`Failed to install pg0: ${e}`);
+
+    // Check if installed to a different location via PATH
+    try {
+      const which = execSync("which pg0", { encoding: "utf-8" }).trim();
+      if (which) {
+        return which;
+      }
+    } catch {
+      // Not in PATH
+    }
+
+    throw new Pg0NotFoundError("Install script succeeded but pg0 binary not found");
+  } catch (e: any) {
+    if (e instanceof Pg0NotFoundError) throw e;
+    throw new Pg0NotFoundError(`Failed to install pg0: ${e.message || e}`);
   }
 }
 

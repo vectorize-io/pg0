@@ -60,6 +60,25 @@ pg0.info(name="default")                    # Get instance info
 pg0.list_instances()                        # List all instances
 ```
 
+### Getting Connection URI
+
+```python
+from pg0 import Pg0
+
+pg = Pg0()
+pg.start()
+
+# Using the uri property
+print(pg.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+
+# Or using info()
+info = pg.info()
+print(info.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+print(info.port)  # 5432
+print(info.username)  # postgres
+print(info.database)  # postgres
+```
+
 ## Links
 
 - [GitHub](https://github.com/vectorize-io/pg0)

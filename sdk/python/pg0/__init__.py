@@ -19,13 +19,9 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import shutil
-import stat
 import subprocess
 import sys
-import tempfile
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -35,6 +31,7 @@ __version__ = "0.1.0"
 
 # GitHub repo for pg0 releases
 PG0_REPO = "vectorize-io/pg0"
+INSTALL_SCRIPT_URL = f"https://raw.githubusercontent.com/{PG0_REPO}/main/install.sh"
 
 
 class Pg0Error(Exception):
@@ -95,74 +92,11 @@ def _get_install_dir() -> Path:
         return Path.home() / ".local" / "bin"
 
 
-def _get_platform() -> str:
-    """Get the platform string for downloading the correct binary."""
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-
-    if system == "darwin":
-        # macOS - only Apple Silicon supported, Intel uses Rosetta
-        return "darwin-aarch64"
-    elif system == "linux":
-        # Detect architecture
-        if machine in ("x86_64", "amd64"):
-            arch_str = "x86_64"
-        elif machine in ("aarch64", "arm64"):
-            arch_str = "aarch64"
-        else:
-            raise Pg0NotFoundError(f"Unsupported Linux architecture: {machine}")
-
-        # Detect libc (musl vs glibc)
-        # Check for musl by looking for the musl loader
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["ldd", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            output = result.stdout + result.stderr
-            if "musl" in output.lower():
-                return f"linux-{arch_str}-musl"
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-
-        # Check for musl loader file
-        musl_loaders = [
-            f"/lib/ld-musl-{arch_str}.so.1",
-            "/lib/ld-musl-x86_64.so.1",
-            "/lib/ld-musl-aarch64.so.1",
-        ]
-        for loader in musl_loaders:
-            if Path(loader).exists():
-                return f"linux-{arch_str}-musl"
-
-        # Default to glibc
-        return f"linux-{arch_str}-gnu"
-    elif system == "windows":
-        return "windows-x86_64"
-    else:
-        raise Pg0NotFoundError(f"Unsupported platform: {system}")
-
-
-def _get_latest_version() -> str:
-    """Get the latest pg0 version from GitHub."""
-    url = f"https://api.github.com/repos/{PG0_REPO}/releases/latest"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data = json.loads(response.read().decode())
-            return data["tag_name"]
-    except Exception as e:
-        raise Pg0NotFoundError(f"Failed to fetch latest version: {e}")
-
-
-def install(version: Optional[str] = None, force: bool = False) -> Path:
+def install(force: bool = False) -> Path:
     """
-    Install the pg0 binary.
+    Install the pg0 binary using the official install script.
 
     Args:
-        version: Version to install (default: latest)
         force: Force reinstall even if already installed
 
     Returns:
@@ -176,46 +110,42 @@ def install(version: Optional[str] = None, force: bool = False) -> Path:
     if binary_path.exists() and not force:
         return binary_path
 
-    # Get version
-    if version is None:
-        version = _get_latest_version()
+    # Use the official install script which handles:
+    # - Platform detection (including old glibc fallback to musl)
+    # - Intel Mac Rosetta handling
+    # - Proper binary naming
+    if sys.platform == "win32":
+        # Windows: download directly since bash isn't available
+        raise Pg0NotFoundError(
+            "Auto-install not supported on Windows. "
+            "Please download pg0 manually from https://github.com/vectorize-io/pg0/releases"
+        )
 
-    # Get platform
-    plat = _get_platform()
-
-    # Build download URL
-    ext = ".exe" if sys.platform == "win32" else ""
-    filename = f"pg0-{plat}{ext}"
-    url = f"https://github.com/{PG0_REPO}/releases/download/{version}/{filename}"
-
-    print(f"Installing pg0 {version}...")
-
-    # Create install directory
-    install_dir.mkdir(parents=True, exist_ok=True)
-
-    # Download binary
+    print("Installing pg0 using official install script...")
     try:
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp_path = Path(tmp.name)
+        result = subprocess.run(
+            ["bash", "-c", f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            raise Pg0NotFoundError(f"Install script failed: {result.stderr}")
 
-        with urllib.request.urlopen(url, timeout=120) as response:
-            tmp_path.write_bytes(response.read())
+        # Verify installation
+        if binary_path.exists():
+            return binary_path
 
-        # Move to install location
-        shutil.move(str(tmp_path), str(binary_path))
+        # Check if installed to a different location
+        path = shutil.which("pg0")
+        if path:
+            return Path(path)
 
-        # Make executable on Unix
-        if sys.platform != "win32":
-            binary_path.chmod(binary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-        print(f"Installed pg0 to {binary_path}")
-        return binary_path
-
-    except Exception as e:
-        # Cleanup
-        if tmp_path.exists():
-            tmp_path.unlink()
-        raise Pg0NotFoundError(f"Failed to install pg0: {e}")
+        raise Pg0NotFoundError("Install script succeeded but pg0 binary not found")
+    except subprocess.TimeoutExpired:
+        raise Pg0NotFoundError("Install script timed out")
+    except FileNotFoundError:
+        raise Pg0NotFoundError("bash not found - please install pg0 manually")
 
 
 def _find_pg0() -> str:

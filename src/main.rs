@@ -551,6 +551,13 @@ fn start(
     configuration.insert("max_parallel_maintenance_workers".to_string(), "4".to_string());
     configuration.insert("work_mem".to_string(), "64MB".to_string());
 
+    // Enable logging to files (required for `pg0 logs` command)
+    configuration.insert("logging_collector".to_string(), "on".to_string());
+    configuration.insert("log_directory".to_string(), "log".to_string());
+    configuration.insert("log_filename".to_string(), "postgresql-%Y-%m-%d.log".to_string());
+    configuration.insert("log_rotation_age".to_string(), "1d".to_string());
+    configuration.insert("log_rotation_size".to_string(), "100MB".to_string());
+
     // Parse and apply custom config options (these override defaults)
     for cfg in &config {
         if let Some((key, value)) = cfg.split_once('=') {
