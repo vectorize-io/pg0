@@ -25,8 +25,8 @@ jobs:
           name: pg0-macos
           path: target/release/pg0
 
-  sdk-python:
-    name: Python SDK Tests
+  sdk-tests:
+    name: SDK Tests (macOS)
     needs: build
     runs-on: macos-latest
     steps:
@@ -49,118 +49,72 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install dependencies
-        working-directory: sdk/python
-        run: uv sync --dev
-
-      - name: Run tests
-        working-directory: sdk/python
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          uv run pytest tests/ -v
-
-  sdk-node:
-    name: Node.js SDK Tests
-    needs: build
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download CLI
-        uses: actions/download-artifact@v4
-        with:
-          name: pg0-macos
-          path: ~/.local/bin
-
-      - name: Make CLI executable
-        run: chmod +x ~/.local/bin/pg0
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        working-directory: sdk/node
-        run: npm install
+      - name: Run Python SDK tests
+        working-directory: sdk/python
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --dev
+          uv run pytest tests/ -v
 
-      - name: Run tests
+      - name: Run Node.js SDK tests
         working-directory: sdk/node
         run: |
           export PATH="$HOME/.local/bin:$PATH"
+          npm install
           npm test
 
+  # Docker tests - one job per platform, runs both CLI and Python SDK tests
   docker-tests:
-    name: Docker Tests - CLI (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
+    name: Docker Tests (${{ matrix.platform }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: debian-amd64
-            runner: ubuntu-latest
-            script: docker-tests/test_debian_amd64.sh
+            cli_script: docker-tests/test_debian_amd64.sh
+            python_script: docker-tests/python/test_debian_amd64.sh
+            needs_qemu: false
           - platform: debian-arm64
-            runner: ubuntu-latest
-            script: docker-tests/test_debian_arm64.sh
+            cli_script: docker-tests/test_debian_arm64.sh
+            python_script: docker-tests/python/test_debian_arm64.sh
+            needs_qemu: true
           - platform: alpine-amd64
-            runner: ubuntu-latest
-            script: docker-tests/test_alpine_amd64.sh
+            cli_script: docker-tests/test_alpine_amd64.sh
+            python_script: docker-tests/python/test_alpine_amd64.sh
+            needs_qemu: false
           - platform: alpine-arm64
-            runner: ubuntu-latest
-            script: docker-tests/test_alpine_arm64.sh
+            cli_script: docker-tests/test_alpine_arm64.sh
+            python_script: docker-tests/python/test_alpine_arm64.sh
+            needs_qemu: true
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up QEMU (for ARM64 emulation)
-        if: contains(matrix.platform, 'arm64')
+        if: matrix.needs_qemu
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Run Docker test
+      - name: Run CLI Docker test
         run: |
-          chmod +x ${{ matrix.script }}
-          bash ${{ matrix.script }}
+          chmod +x ${{ matrix.cli_script }}
+          bash ${{ matrix.cli_script }}
 
-  docker-tests-python:
-    name: Docker Tests - Python SDK (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: debian-amd64
-            runner: ubuntu-latest
-            script: docker-tests/python/test_debian_amd64.sh
-          - platform: debian-arm64
-            runner: ubuntu-latest
-            script: docker-tests/python/test_debian_arm64.sh
-          - platform: alpine-amd64
-            runner: ubuntu-latest
-            script: docker-tests/python/test_alpine_amd64.sh
-          - platform: alpine-arm64
-            runner: ubuntu-latest
-            script: docker-tests/python/test_alpine_arm64.sh
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU (for ARM64 emulation)
-        if: contains(matrix.platform, 'arm64')
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Run Docker test
+      - name: Run Python SDK Docker test
         run: |
-          chmod +x ${{ matrix.script }}
-          bash ${{ matrix.script }}
+          chmod +x ${{ matrix.python_script }}
+          bash ${{ matrix.python_script }}
 
-  # Build Python wheels to verify the build process works
+  # Python wheel builds - test that wheel building works
   python-wheels:
-    name: Build Python Wheels
+    name: Python Wheels
     uses: ./.github/workflows/build-python-wheels.yml
     with:
       upload-artifacts: false
