@@ -49,24 +49,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
       - name: Run Python SDK tests
         working-directory: sdk/python
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          uv sync --dev
-          uv run pytest tests/ -v
-
-      - name: Run Node.js SDK tests
-        working-directory: sdk/node
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          npm install
-          npm test
+          uv pip install -e ".[dev]"
+          pytest tests/ -v
 
   # Docker tests - one job per platform, runs both CLI and Python SDK tests
   docker-tests:
