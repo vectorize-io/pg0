@@ -1,8 +1,8 @@
-# pg0 - Embedded PostgreSQL for Node.js
+# pg0 - PostgreSQL for Node.js
 
 [![npm](https://badge.fury.io/js/@vectorize-io%2Fpg0.svg)](https://www.npmjs.com/package/@vectorize-io/pg0)
 
-Embedded PostgreSQL with pgvector. No installation, no Docker, no configuration.
+Zero-config PostgreSQL with pgvector. No installation, no Docker, no configuration.
 
 ## Install
 

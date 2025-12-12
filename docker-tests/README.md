@@ -2,7 +2,7 @@
 
 Automated tests to verify pg0 works correctly across different platforms and distributions.
 
-## Test Matrix
+## CLI Tests
 
 | Test | Image | Platform | Architecture | libc |
 |------|-------|----------|--------------|------|
@@ -10,6 +10,17 @@ Automated tests to verify pg0 works correctly across different platforms and dis
 | `test_debian_arm64.sh` | python:3.11-slim | linux/arm64 | aarch64 | glibc |
 | `test_alpine_amd64.sh` | python:3.12-alpine3.20 | linux/amd64 | x86_64 | musl |
 | `test_alpine_arm64.sh` | python:3.12-alpine3.20 | linux/arm64 | aarch64 | musl |
+
+## Python SDK Tests
+
+| Test | Image | Platform | Architecture | libc |
+|------|-------|----------|--------------|------|
+| `python/test_debian_amd64.sh` | python:3.11-slim | linux/amd64 | x86_64 | glibc |
+| `python/test_debian_arm64.sh` | python:3.11-slim | linux/arm64 | aarch64 | glibc |
+| `python/test_alpine_amd64.sh` | python:3.12-alpine3.20 | linux/amd64 | x86_64 | musl |
+| `python/test_alpine_arm64.sh` | python:3.12-alpine3.20 | linux/arm64 | aarch64 | musl |
+
+The Python SDK tests install the package via `pip install .` and verify the bundled binary works correctly.
 
 ## What Each Test Does
 
@@ -55,7 +66,7 @@ chmod +x *.sh
 - ✅ All queries: Success
 
 ### Alpine (musl)
-- ✅ PostgreSQL: Works (requires `icu-libs`, `lz4-libs`, `libxml2` packages and ICU 74 - use Alpine 3.20)
+- ✅ PostgreSQL: Works (requires `icu-libs`, `lz4-libs`, `libxml2`, `zstd-libs`, `procps` packages and ICU 74 - use Alpine 3.20)
 - ⚠️ pgvector: Fails (no musl binaries available - glibc-only)
 - ✅ Basic queries: Success
 

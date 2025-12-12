@@ -82,6 +82,16 @@ class InstanceInfo:
         )
 
 
+def _get_bundled_binary() -> Optional[Path]:
+    """Get the path to the bundled pg0 binary, if it exists."""
+    package_dir = Path(__file__).parent
+    binary_name = "pg0.exe" if sys.platform == "win32" else "pg0"
+    bundled_path = package_dir / "bin" / binary_name
+    if bundled_path.exists():
+        return bundled_path
+    return None
+
+
 def _get_install_dir() -> Path:
     """Get the directory where pg0 binary should be installed."""
     # Use ~/.local/bin on Unix, or a pg0-specific dir
@@ -96,17 +106,25 @@ def install(force: bool = False) -> Path:
     """
     Install the pg0 binary using the official install script.
 
+    Note: If the package was installed from a platform-specific wheel,
+    the binary is already bundled and this function returns immediately.
+
     Args:
         force: Force reinstall even if already installed
 
     Returns:
         Path to the installed binary
     """
+    # Check for bundled binary first (from platform-specific wheel)
+    bundled = _get_bundled_binary()
+    if bundled and not force:
+        return bundled
+
     install_dir = _get_install_dir()
     binary_name = "pg0.exe" if sys.platform == "win32" else "pg0"
     binary_path = install_dir / binary_name
 
-    # Check if already installed
+    # Check if already installed externally
     if binary_path.exists() and not force:
         return binary_path
 
@@ -150,7 +168,12 @@ def install(force: bool = False) -> Path:
 
 def _find_pg0() -> str:
     """Find the pg0 binary, installing if necessary."""
-    # Check PATH first
+    # Check for bundled binary first (from platform-specific wheel)
+    bundled = _get_bundled_binary()
+    if bundled:
+        return str(bundled)
+
+    # Check PATH
     path = shutil.which("pg0")
     if path:
         return path
@@ -163,8 +186,8 @@ def _find_pg0() -> str:
     if binary_path.exists():
         return str(binary_path)
 
-    # Auto-install
-    installed_path = install(version=None)
+    # Auto-install as fallback
+    installed_path = install()
     return str(installed_path)
 
 
@@ -482,4 +505,5 @@ __all__ = [
     "stop",
     "drop",
     "info",
+    "_get_bundled_binary",  # for testing
 ]

@@ -24,7 +24,7 @@ cat /etc/os-release | grep PRETTY_NAME
 
 echo ""
 echo "=== Installing dependencies ==="
-apk add --no-cache curl bash sudo procps shadow icu-libs lz4-libs libxml2 > /dev/null 2>&1
+apk add --no-cache curl bash sudo procps shadow icu-libs lz4-libs libxml2 zstd-libs > /dev/null 2>&1
 
 echo ""
 echo "=== Creating non-root user ==="

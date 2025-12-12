@@ -579,7 +579,7 @@ fn start(
         installation_dir: version_install_dir,
         configuration,
         trust_installation_dir: true, // Use our extracted files
-        timeout: Some(std::time::Duration::from_secs(300)), // 5 minute timeout for slow systems (ARM64 emulation)
+        timeout: Some(std::time::Duration::from_secs(600)), // 10 minute timeout for slow systems (ARM64 emulation under QEMU)
         ..Default::default()
     };
 

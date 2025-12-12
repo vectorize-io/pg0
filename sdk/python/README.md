@@ -1,8 +1,8 @@
-# pg0 - Embedded PostgreSQL for Python
+# pg0 - PostgreSQL for Python
 
 [![PyPI](https://badge.fury.io/py/pg0-embedded.svg)](https://pypi.org/project/pg0-embedded/)
 
-Embedded PostgreSQL with pgvector. No installation, no Docker, no configuration.
+Zero-config PostgreSQL with pgvector. No installation, no Docker, no configuration.
 
 ## Install
 
@@ -77,6 +77,22 @@ print(info.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
 print(info.port)  # 5432
 print(info.username)  # postgres
 print(info.database)  # postgres
+```
+
+## Supported Platforms
+
+Pre-built wheels are available for:
+
+| Platform | Architecture | Wheel Tag |
+|----------|--------------|-----------|
+| macOS | Apple Silicon (M1/M2/M3) | `macosx_14_0_arm64` |
+| Linux | x86_64 (glibc) | `manylinux_2_35_x86_64` |
+| Linux | ARM64 (glibc) | `manylinux_2_35_aarch64` |
+| Windows | x64 | `win_amd64` |
+
+For other platforms, install from source (requires Rust toolchain):
+```bash
+pip install pg0-embedded --no-binary pg0-embedded
 ```
 
 ## Links
