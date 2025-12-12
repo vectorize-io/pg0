@@ -4,3 +4,4 @@ Cargo.lock
 node_modules/
 .env
 *.pyc
+sdk/python/pg0/bin/
