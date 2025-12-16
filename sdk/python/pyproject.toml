@@ -1,6 +1,6 @@
 [project]
 name = "pg0-embedded"
-version = "0.10.1"
+version = "0.11.0"
 description = "Python API for pg0 - embedded PostgreSQL"
 readme = "README.md"
 license = "MIT"
