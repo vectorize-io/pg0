@@ -458,15 +458,26 @@ Most desktop Linux distributions and macOS have these libraries pre-installed. Y
 
 ### PostgreSQL Cannot Run as Root
 
-PostgreSQL refuses to run as root for security reasons. If you see permission errors in Docker or Linux:
+PostgreSQL refuses to run as root for security reasons. If you see this error:
+
+```
+initdb: error: cannot be run as root
+```
+
+You need to run pg0 as a non-root user:
 
 ```bash
-# Create a non-root user
+# Create a non-root user and run pg0
 useradd -m pguser
 su - pguser -c "pg0 start"
 ```
 
-See the [Docker](#docker) section for complete examples.
+**Note:** This means pg0 won't work in environments that only allow root access, such as:
+- Google Colab (runs as root)
+- Some CI environments
+- Restricted containers
+
+See the [Docker](#docker) section for complete examples of running pg0 as a non-root user.
 
 ### Port Already in Use
 

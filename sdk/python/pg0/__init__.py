@@ -29,10 +29,6 @@ from typing import Optional
 
 __version__ = "0.1.0"
 
-# GitHub repo for pg0 releases
-PG0_REPO = "vectorize-io/pg0"
-INSTALL_SCRIPT_URL = f"https://raw.githubusercontent.com/{PG0_REPO}/main/install.sh"
-
 
 class Pg0Error(Exception):
     """Base exception for pg0 errors."""
@@ -102,72 +98,8 @@ def _get_install_dir() -> Path:
         return Path.home() / ".local" / "bin"
 
 
-def install(force: bool = False) -> Path:
-    """
-    Install the pg0 binary using the official install script.
-
-    Note: If the package was installed from a platform-specific wheel,
-    the binary is already bundled and this function returns immediately.
-
-    Args:
-        force: Force reinstall even if already installed
-
-    Returns:
-        Path to the installed binary
-    """
-    # Check for bundled binary first (from platform-specific wheel)
-    bundled = _get_bundled_binary()
-    if bundled and not force:
-        return bundled
-
-    install_dir = _get_install_dir()
-    binary_name = "pg0.exe" if sys.platform == "win32" else "pg0"
-    binary_path = install_dir / binary_name
-
-    # Check if already installed externally
-    if binary_path.exists() and not force:
-        return binary_path
-
-    # Use the official install script which handles:
-    # - Platform detection (including old glibc fallback to musl)
-    # - Intel Mac Rosetta handling
-    # - Proper binary naming
-    if sys.platform == "win32":
-        # Windows: download directly since bash isn't available
-        raise Pg0NotFoundError(
-            "Auto-install not supported on Windows. "
-            "Please download pg0 manually from https://github.com/vectorize-io/pg0/releases"
-        )
-
-    print("Installing pg0 using official install script...")
-    try:
-        result = subprocess.run(
-            ["bash", "-c", f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            raise Pg0NotFoundError(f"Install script failed: {result.stderr}")
-
-        # Verify installation
-        if binary_path.exists():
-            return binary_path
-
-        # Check if installed to a different location
-        path = shutil.which("pg0")
-        if path:
-            return Path(path)
-
-        raise Pg0NotFoundError("Install script succeeded but pg0 binary not found")
-    except subprocess.TimeoutExpired:
-        raise Pg0NotFoundError("Install script timed out")
-    except FileNotFoundError:
-        raise Pg0NotFoundError("bash not found - please install pg0 manually")
-
-
 def _find_pg0() -> str:
-    """Find the pg0 binary, installing if necessary."""
+    """Find the pg0 binary or raise an error if not found."""
     # Check for bundled binary first (from platform-specific wheel)
     bundled = _get_bundled_binary()
     if bundled:
@@ -178,7 +110,7 @@ def _find_pg0() -> str:
     if path:
         return path
 
-    # Check our install location
+    # Check common install location
     install_dir = _get_install_dir()
     binary_name = "pg0.exe" if sys.platform == "win32" else "pg0"
     binary_path = install_dir / binary_name
@@ -186,9 +118,12 @@ def _find_pg0() -> str:
     if binary_path.exists():
         return str(binary_path)
 
-    # Auto-install as fallback
-    installed_path = install()
-    return str(installed_path)
+    # No binary found
+    raise Pg0NotFoundError(
+        "pg0 binary not found. Install it with:\n"
+        "  curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash\n"
+        "Or download from: https://github.com/vectorize-io/pg0/releases"
+    )
 
 
 def _run_pg0(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -219,7 +154,7 @@ class Pg0:
 
     Args:
         name: Instance name (allows multiple instances)
-        port: Port to listen on
+        port: Port to listen on (None = auto-select available port)
         username: Database username
         password: Database password
         database: Database name
@@ -227,13 +162,13 @@ class Pg0:
         config: Dict of PostgreSQL configuration options
 
     Example:
-        # Simple usage
+        # Simple usage (auto-selects available port)
         pg = Pg0()
         pg.start()
         print(pg.uri)
         pg.stop()
 
-        # Context manager
+        # Context manager with specific port
         with Pg0(port=5433, database="myapp") as pg:
             print(pg.uri)
 
@@ -244,7 +179,7 @@ class Pg0:
     def __init__(
         self,
         name: str = "default",
-        port: int = 5432,
+        port: Optional[int] = None,
         username: str = "postgres",
         password: str = "postgres",
         database: str = "postgres",
@@ -273,11 +208,13 @@ class Pg0:
         args = [
             "start",
             "--name", self.name,
-            "--port", str(self.port),
             "--username", self.username,
             "--password", self.password,
             "--database", self.database,
         ]
+
+        if self.port is not None:
+            args.extend(["--port", str(self.port)])
 
         if self.data_dir:
             args.extend(["--data-dir", self.data_dir])
@@ -364,6 +301,25 @@ class Pg0:
         result = self.psql("-c", sql)
         return result.stdout
 
+    def logs(self, lines: Optional[int] = None) -> str:
+        """
+        Get PostgreSQL logs for this instance.
+
+        Args:
+            lines: Number of lines to return (None = all logs)
+
+        Returns:
+            Log content as string
+
+        Example:
+            print(pg.logs(50))  # Last 50 lines
+        """
+        args = ["logs", "--name", self.name]
+        if lines is not None:
+            args.extend(["-n", str(lines)])
+        result = _run_pg0(*args, check=False)
+        return result.stdout
+
     def __enter__(self) -> "Pg0":
         """Context manager entry - starts PostgreSQL."""
         self.start()
@@ -407,7 +363,7 @@ def list_extensions() -> list[str]:
 
 def start(
     name: str = "default",
-    port: int = 5432,
+    port: Optional[int] = None,
     username: str = "postgres",
     password: str = "postgres",
     database: str = "postgres",
@@ -418,7 +374,7 @@ def start(
 
     Args:
         name: Instance name
-        port: Port to listen on
+        port: Port to listen on (None = auto-select available port)
         username: Database username
         password: Database password
         database: Database name
@@ -428,7 +384,7 @@ def start(
         InstanceInfo with connection details
 
     Example:
-        info = pg0.start(port=5433, shared_buffers="512MB")
+        info = pg0.start(shared_buffers="512MB")  # auto-selects port
         print(info.uri)
     """
     pg = Pg0(
@@ -486,6 +442,24 @@ def info(name: str = "default") -> InstanceInfo:
     return InstanceInfo.from_dict(data)
 
 
+def logs(name: str = "default", lines: Optional[int] = None) -> str:
+    """
+    Get PostgreSQL logs for an instance (convenience function).
+
+    Args:
+        name: Instance name
+        lines: Number of lines to return (None = all logs)
+
+    Returns:
+        Log content as string
+    """
+    args = ["logs", "--name", name]
+    if lines is not None:
+        args.extend(["-n", str(lines)])
+    result = _run_pg0(*args, check=False)
+    return result.stdout
+
+
 # Keep PostgreSQL as alias for backwards compatibility
 PostgreSQL = Pg0
 
@@ -498,12 +472,12 @@ __all__ = [
     "Pg0NotFoundError",
     "Pg0NotRunningError",
     "Pg0AlreadyRunningError",
-    "install",
     "list_instances",
     "list_extensions",
     "start",
     "stop",
     "drop",
     "info",
+    "logs",
     "_get_bundled_binary",  # for testing
 ]

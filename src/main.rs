@@ -328,6 +328,38 @@ fn find_available_port(start_port: u16) -> u16 {
     port
 }
 
+/// Read the latest PostgreSQL log file content (last 20 lines)
+fn read_latest_pg_log(data_dir: &PathBuf) -> Option<String> {
+    let log_dir = data_dir.join("log");
+    let entries = fs::read_dir(&log_dir).ok()?;
+
+    // Find the most recent log file
+    let mut log_files: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "log").unwrap_or(false))
+        .collect();
+    log_files.sort_by_key(|e| {
+        std::cmp::Reverse(
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+        )
+    });
+
+    let log_file = log_files.first()?;
+    let content = fs::read_to_string(log_file.path()).ok()?;
+
+    // Get last 20 lines
+    let lines: Vec<&str> = content.lines().collect();
+    let last_lines: Vec<&str> = lines.iter().rev().take(20).rev().cloned().collect();
+
+    if last_lines.is_empty() {
+        None
+    } else {
+        Some(last_lines.join("\n"))
+    }
+}
+
 /// Extract the bundled PostgreSQL to the installation directory
 /// Returns the path to the version-specific directory (e.g., ~/.pg0/installation/18.1.0)
 fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> Result<PathBuf, CliError> {
@@ -593,7 +625,16 @@ fn start(
     }
 
     println!("Starting PostgreSQL on port {}...", port);
-    postgresql.start()?;
+    if let Err(e) = postgresql.start() {
+        // Try to read the PostgreSQL log for more context
+        let log_context = read_latest_pg_log(&data_dir);
+        let error_msg = if let Some(log) = log_context {
+            format!("Failed to start PostgreSQL: {}\n\nPostgreSQL log:\n{}", e, log)
+        } else {
+            format!("Failed to start PostgreSQL: {}", e)
+        };
+        return Err(CliError::Other(error_msg));
+    }
 
     // Create the user if it's not the default 'postgres'
     // Note: postgresql_embedded always creates 'postgres' as the superuser

@@ -2,7 +2,7 @@
 
 import pytest
 import pg0
-from pg0 import Pg0, InstanceInfo, Pg0AlreadyRunningError
+from pg0 import Pg0, InstanceInfo, Pg0AlreadyRunningError, Pg0Error
 
 
 # Use a unique port to avoid conflicts
@@ -127,6 +127,26 @@ class TestPg0:
         assert info.running is False
         assert info.uri is None
 
+    def test_port_conflict_error(self, clean_instance):
+        """Test that starting two instances on the same port gives a readable error."""
+        pg1 = Pg0(name=TEST_NAME, port=TEST_PORT)
+        pg2 = Pg0(name=f"{TEST_NAME}-2", port=TEST_PORT)
+
+        pg1.start()
+
+        try:
+            with pytest.raises(Pg0Error) as exc_info:
+                pg2.start()
+
+            # Verify the error message mentions the port conflict
+            error_message = str(exc_info.value).lower()
+            assert "port" in error_message or "address" in error_message or "in use" in error_message, \
+                f"Error message should mention port conflict, got: {exc_info.value}"
+        finally:
+            pg1.stop()
+            pg2.stop()
+            pg0.drop(f"{TEST_NAME}-2")
+
 
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
@@ -155,6 +175,29 @@ class TestConvenienceFunctions:
             assert TEST_NAME in names
         finally:
             pg0.stop(TEST_NAME)
+
+    def test_logs(self, clean_instance):
+        """Test getting logs."""
+        pg = Pg0(name=TEST_NAME, port=TEST_PORT)
+        pg.start()
+
+        try:
+            # Run a query to generate some log activity
+            pg.execute("SELECT 1;")
+
+            # Get logs via instance method
+            logs = pg.logs()
+            assert isinstance(logs, str)
+
+            # Get logs with line limit
+            logs_limited = pg.logs(lines=10)
+            assert isinstance(logs_limited, str)
+
+            # Get logs via module function
+            logs_module = pg0.logs(TEST_NAME)
+            assert isinstance(logs_module, str)
+        finally:
+            pg.stop()
 
 
 class TestInstanceInfo:
