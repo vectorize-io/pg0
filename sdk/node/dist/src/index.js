@@ -153,7 +153,8 @@ function findPg0Sync() {
     // Check PATH
     const { execSync } = require("child_process");
     try {
-        const result = execSync("which pg0 2>/dev/null || where pg0 2>nul", { encoding: "utf-8" });
+        const cmd = process.platform === "win32" ? "where pg0" : "which pg0";
+        const result = execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
         if (result.trim())
             return result.trim().split("\n")[0];
     }
@@ -181,7 +182,8 @@ async function findPg0() {
     // Check PATH
     const { execSync } = require("child_process");
     try {
-        const result = execSync("which pg0 2>/dev/null || where pg0 2>nul", { encoding: "utf-8" });
+        const cmd = process.platform === "win32" ? "where pg0" : "which pg0";
+        const result = execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
         if (result.trim())
             return result.trim().split("\n")[0];
     }
