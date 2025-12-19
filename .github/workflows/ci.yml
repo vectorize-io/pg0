@@ -92,3 +92,39 @@ jobs:
     with:
       upload-artifacts: false
       test-wheels: true
+
+  # Test installing from sdist (source distribution)
+  python-sdist-install:
+    name: Python sdist Install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build sdist
+        working-directory: sdk/python
+        run: uv build --sdist
+
+      - name: Install from sdist in isolated environment
+        run: |
+          # Create a fresh directory outside the repo to simulate user install
+          mkdir /tmp/sdist-test
+          cp sdk/python/dist/*.tar.gz /tmp/sdist-test/
+          cd /tmp/sdist-test
+
+          # Install from sdist (this should download binary from GitHub releases)
+          pip install *.tar.gz -v 2>&1 | tee install.log
+
+          # Verify the download happened
+          grep -q "Downloading pg0" install.log || echo "Warning: Download message not found"
+
+          # Verify the package works
+          python -c "from pg0 import Pg0; print('Import successful')"
+          python -c "from pg0 import _get_bundled_binary; assert _get_bundled_binary() is not None, 'Binary not bundled'; print('Binary bundled correctly')"
