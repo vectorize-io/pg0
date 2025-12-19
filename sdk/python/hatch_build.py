@@ -3,11 +3,10 @@ Hatch build hook to include the pg0 binary in the wheel.
 
 The binary can come from:
 1. PG0_BINARY_PATH env var - path to a pre-built binary (for CI/release)
-2. Local cargo build - builds from source using cargo (default for local dev)
-3. GitHub releases - downloads from releases (fallback, requires PG0_VERSION)
+2. Local cargo build - builds from source using cargo (only if in repo with Cargo.toml)
+3. GitHub releases - downloads from releases (fallback for sdist installs)
 """
 
-import hashlib
 import os
 import platform
 import shutil
@@ -15,11 +14,11 @@ import stat
 import subprocess
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-# GitHub repo for downloading releases (fallback only)
+# GitHub repo for downloading releases
 PG0_REPO = "vectorize-io/pg0"
 
 
@@ -61,14 +60,18 @@ def get_platform() -> str:
         raise RuntimeError(f"Unsupported platform: {system}")
 
 
-def build_binary_locally(target_dir: Path) -> Path:
-    """Build pg0 binary from source using cargo."""
+def try_build_binary_locally(target_dir: Path) -> Optional[Path]:
+    """Try to build pg0 binary from source using cargo.
+
+    Returns the path to the binary if successful, None if not in a repo context.
+    """
     # Find the repo root (sdk/python -> repo root)
     repo_root = Path(__file__).parent.parent.parent
 
     cargo_toml = repo_root / "Cargo.toml"
     if not cargo_toml.exists():
-        raise RuntimeError(f"Cargo.toml not found at {cargo_toml}")
+        # Not in repo context (e.g., installing from sdist)
+        return None
 
     print("Building pg0 binary from source...")
     print(f"  Repo root: {repo_root}")
@@ -138,6 +141,21 @@ def download_binary(target_dir: Path, plat: str, version: str) -> Path:
     return binary_path
 
 
+def get_package_version(root: Path) -> str:
+    """Read the package version from pyproject.toml."""
+    import re
+
+    pyproject_path = root / "pyproject.toml"
+    content = pyproject_path.read_text()
+
+    # Simple regex to find version = "x.y.z" in [project] section
+    match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+    if match:
+        return match.group(1)
+
+    raise RuntimeError("Could not find version in pyproject.toml")
+
+
 class CustomBuildHook(BuildHookInterface):
     """Build hook to include pg0 binary in wheel build."""
 
@@ -168,13 +186,21 @@ class CustomBuildHook(BuildHookInterface):
             shutil.copy2(src_path, binary_path)
             if system != "windows":
                 binary_path.chmod(binary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        # Option 2: Download from GitHub releases (requires PG0_VERSION)
+        # Option 2: Download from GitHub releases (if PG0_VERSION specified)
         elif os.environ.get("PG0_VERSION"):
             plat = os.environ.get("PG0_TARGET_PLATFORM") or get_platform()
             download_binary(bin_dir, plat, os.environ["PG0_VERSION"])
-        # Option 3: Build locally from source (default for local dev)
+        # Option 3: Try to build locally from source (if in repo context)
         else:
-            build_binary_locally(bin_dir)
+            built_path = try_build_binary_locally(bin_dir)
+            if built_path is not None:
+                print(f"Built binary: {built_path}")
+            else:
+                # Option 4: Download from GitHub releases using package version (fallback for sdist)
+                pkg_version = get_package_version(root)
+                plat = get_platform()
+                print(f"Downloading pg0 v{pkg_version} for {plat} (sdist install)...")
+                download_binary(bin_dir, plat, f"v{pkg_version}")
 
         # Note: The binary is included via artifacts = ["pg0/bin/*"] in pyproject.toml
         # No need to use force_include here
