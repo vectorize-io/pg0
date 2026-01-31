@@ -37,6 +37,7 @@ All platforms in `build.rs` and `.github/workflows/release-cli.yml` must have:
 
 ## Build Requirements
 
-- All builds must succeed with all three components bundled
-- Graceful fallback (creating empty markers) is only for platforms that are NOT officially supported
-- Supported platforms must never ship with missing components
+- **All builds must succeed with all three components bundled**
+- **Build MUST FAIL if any component is missing** for supported platforms
+- No graceful fallbacks - missing components = build failure
+- This ensures platforms are only released when fully functional
