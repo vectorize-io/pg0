@@ -32,7 +32,7 @@ jobs:
             os: macos-latest
             name: darwin-aarch64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             name: darwin-x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -122,9 +122,9 @@ jobs:
             cli_binary: pg0-darwin-aarch64
 
           # macOS Intel - reuse darwin-x86_64 CLI
-          - os: macos-13
+          - os: macos-15-intel
             platform: darwin-x86_64
-            wheel_platform: macosx_13_0_x86_64
+            wheel_platform: macosx_15_0_x86_64
             cli_artifact: cli-darwin-x86_64
             cli_binary: pg0-darwin-x86_64
 
@@ -284,7 +284,7 @@ jobs:
 
           Pre-built wheels available for:
           - macOS Apple Silicon (`macosx_14_0_arm64`)
-          - macOS Intel (`macosx_13_0_x86_64`)
+          - macOS Intel (`macosx_15_0_x86_64`)
           - Linux x86_64 glibc (`manylinux_2_35_x86_64`)
           - Linux ARM64 glibc (`manylinux_2_35_aarch64`)
           - Windows x64 (`win_amd64`)
