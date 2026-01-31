@@ -28,6 +28,12 @@ jobs:
             wheel_platform: macosx_14_0_arm64
             rust_target: aarch64-apple-darwin
 
+          # macOS Intel
+          - os: macos-15-intel
+            platform: darwin-x86_64
+            wheel_platform: macosx_15_0_x86_64
+            rust_target: x86_64-apple-darwin
+
           # Linux x86_64 glibc
           - os: ubuntu-22.04
             platform: linux-x86_64-gnu
