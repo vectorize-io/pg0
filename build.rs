@@ -231,19 +231,8 @@ fn bundle_pgvector(pg_version: &str, pgvector_tag: &str, pgvector_repo: &str, ou
             "Downloading pgvector for {} (PG {})...",
             pgvector_platform, pg_major
         );
-        match download_file(&url, &bundle_path) {
-            Ok(_) => eprintln!("Downloaded to {}", bundle_path.display()),
-            Err(e) => {
-                eprintln!("Warning: Failed to download pgvector: {}. Vector extension will not be available.", e);
-                let marker = out_dir.join("pgvector_bundle.tar.gz");
-                fs::write(&marker, b"").expect("Failed to create empty pgvector marker");
-                println!(
-                    "cargo:rustc-env=PGVECTOR_BUNDLE_PATH={}",
-                    marker.display()
-                );
-                return;
-            }
-        }
+        download_file(&url, &bundle_path).expect("Failed to download pgvector bundle");
+        eprintln!("Downloaded to {}", bundle_path.display());
     } else {
         eprintln!("Using cached pgvector bundle: {}", bundle_path.display());
     }
