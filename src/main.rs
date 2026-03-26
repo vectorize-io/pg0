@@ -537,7 +537,13 @@ fn start(
         if is_process_running(info.pid) {
             return Err(CliError::AlreadyRunning(info.pid));
         }
-        // Stale instance, clean up
+        // Stale instance: clean up instance metadata but preserve data directory.
+        // Remove stale postmaster.pid so PostgreSQL can start with existing data.
+        let pid_file = info.data_dir.join("postmaster.pid");
+        if pid_file.exists() {
+            println!("Removing stale postmaster.pid (process {} no longer running)...", info.pid);
+            fs::remove_file(&pid_file)?;
+        }
         remove_instance(&name)?;
     }
 
@@ -611,6 +617,7 @@ fn start(
         installation_dir: version_install_dir,
         configuration,
         trust_installation_dir: true, // Use our extracted files
+        temporary: false, // Never delete data directory on drop - pg0 manages data lifecycle explicitly
         timeout: Some(std::time::Duration::from_secs(600)), // 10 minute timeout for slow systems (ARM64 emulation under QEMU)
         ..Default::default()
     };
