@@ -326,6 +326,28 @@ pg0 logs --name myapp
 
 Logs are stored in `~/.pg0/instances/<name>/data/log/`.
 
+### Installing Extensions
+
+#### pg_textsearch (BM25 full-text search)
+
+[pg_textsearch](https://github.com/timescale/pg_textsearch) adds BM25-ranked full-text search to PostgreSQL. Install it into your pg0 instance with a single command (requires Xcode Command Line Tools on macOS, or `build-essential` on Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/extensions/install-pgtextsearch.sh | bash
+```
+
+Install a specific version or target a named instance:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/extensions/install-pgtextsearch.sh | bash -s -- --version v0.5.1 --instance myapp
+```
+
+Then enable it:
+
+```bash
+pg0 psql -c "CREATE EXTENSION IF NOT EXISTS pg_textsearch;"
+```
+
 ### Using pgvector
 
 pgvector is pre-installed. Just enable it:
@@ -501,6 +523,43 @@ cargo build --release
 ```
 
 The binary will be at `target/release/pg0`.
+
+## Changelog
+
+### 0.12.2
+- Fix reproducible builds by committing `Cargo.lock` ([`28c51ec`](https://github.com/vectorize-io/pg0/commit/28c51ec))
+
+### 0.12.1
+- Fix data loss on restart after unclean shutdown ([#6](https://github.com/vectorize-io/pg0/issues/6), [`21e0f08`](https://github.com/vectorize-io/pg0/commit/21e0f08))
+
+### 0.12.0
+- Intel Mac (x86_64) support ([#5](https://github.com/vectorize-io/pg0/pull/5))
+- Fix Python sdist build ([#4](https://github.com/vectorize-io/pg0/pull/4))
+
+### 0.11.0
+- Improved error handling and logging in Python SDK ([`b6cb333`](https://github.com/vectorize-io/pg0/commit/b6cb333))
+
+### 0.10.0
+- Bundled CLI binary in Python package ([#1](https://github.com/vectorize-io/pg0/pull/1))
+
+### 0.9.0
+- Bundled pgvector extension ([`5ee9fee`](https://github.com/vectorize-io/pg0/commit/5ee9fee))
+
+### 0.8.0
+- Bundled PostgreSQL binaries for offline use ([`a565d5b`](https://github.com/vectorize-io/pg0/commit/a565d5b))
+
+### 0.7.0
+- GLIBC 2.31 support ([`dd4755c`](https://github.com/vectorize-io/pg0/commit/dd4755c))
+
+### 0.6.0
+- ARM64 + Alpine Linux support ([`ebcd95d`](https://github.com/vectorize-io/pg0/commit/ebcd95d))
+- `drop` command and Python/Node SDKs ([`24b75fa`](https://github.com/vectorize-io/pg0/commit/24b75fa))
+
+### 0.2.0
+- Multi-instance support ([`b3ac463`](https://github.com/vectorize-io/pg0/commit/b3ac463))
+
+### 0.1.0
+- Initial release
 
 ## License
 
