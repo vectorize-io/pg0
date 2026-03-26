@@ -1,5 +1,9 @@
 """Tests for pg0 Python client."""
 
+import os
+import signal
+import time
+
 import pytest
 import pg0
 from pg0 import Pg0, InstanceInfo, Pg0AlreadyRunningError, Pg0Error
@@ -146,6 +150,38 @@ class TestPg0:
             pg1.stop()
             pg2.stop()
             pg0.drop(f"{TEST_NAME}-2")
+
+    def test_data_survives_crash(self, clean_instance):
+        """Test that data is preserved after an unclean shutdown (SIGKILL).
+
+        Regression test for https://github.com/vectorize-io/pg0/issues/6
+        Simulates a crash by sending SIGKILL to the PostgreSQL process,
+        which leaves a stale postmaster.pid. On restart, data must still exist.
+        """
+        pg = Pg0(name=TEST_NAME, port=TEST_PORT)
+        info = pg.start()
+
+        # Create a table and insert data
+        pg.execute("CREATE TABLE crash_test (id serial PRIMARY KEY, value text);")
+        pg.execute("INSERT INTO crash_test (value) VALUES ('survive_crash');")
+        result = pg.execute("SELECT value FROM crash_test;")
+        assert "survive_crash" in result
+
+        # Simulate a crash: SIGKILL the postgres process (leaves stale postmaster.pid)
+        pid = info.pid
+        assert pid is not None
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(1)  # Wait for process to die
+
+        # Restart — this must NOT lose data
+        info = pg.start()
+        assert info.running is True
+
+        # Verify data survived the crash
+        result = pg.execute("SELECT value FROM crash_test;")
+        assert "survive_crash" in result
+
+        pg.stop()
 
 
 class TestConvenienceFunctions:
