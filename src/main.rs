@@ -463,7 +463,7 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
 /// Check that the postgres binary can find all required shared libraries.
 /// Only called on Linux. If ldd is unavailable, silently skips the check.
 #[cfg(target_os = "linux")]
-fn check_shared_libraries(bin_dir: &Path) -> Result<(), CliError> {
+fn check_shared_libraries(bin_dir: &std::path::Path) -> Result<(), CliError> {
     let postgres_path = bin_dir.join("postgres");
     let output = match std::process::Command::new("ldd")
         .arg(&postgres_path)
