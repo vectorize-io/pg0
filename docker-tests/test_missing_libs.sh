@@ -11,20 +11,20 @@ echo "============================================="
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 INSTALL_SCRIPT="$SCRIPT_DIR/../install.sh"
 
-# Check if PG0_BINARY_PATH is set (local binary to test)
-VOLUME_ARGS=""
-BINARY_ENV=""
-if [ -n "${PG0_BINARY_PATH:-}" ]; then
-    echo "Using local binary: $PG0_BINARY_PATH"
-    VOLUME_ARGS="-v $PG0_BINARY_PATH:/tmp/pg0-binary:ro"
-    BINARY_ENV="-e PG0_BINARY_URL=file:///tmp/pg0-binary"
+# PG0_BINARY_PATH is required - this test must use a binary built from source
+# (with the shared library detection code), not the released binary
+if [ -z "${PG0_BINARY_PATH:-}" ]; then
+    echo "ERROR: PG0_BINARY_PATH must be set to a Linux binary built from this branch"
+    exit 1
 fi
 
-docker run --rm --platform=linux/amd64 \
-  $BINARY_ENV \
-  -v "$INSTALL_SCRIPT:/tmp/install.sh:ro" \
-  $VOLUME_ARGS \
-  python:3.11-slim bash -c '
+echo "Using local binary: $PG0_BINARY_PATH"
+
+# Create a temporary test script to run inside the container
+# This avoids nested heredoc quoting issues
+TEMP_SCRIPT=$(mktemp)
+cat > "$TEMP_SCRIPT" << 'INNERSCRIPT'
+#!/bin/bash
 set -e
 
 echo "=== System Info ==="
@@ -43,35 +43,28 @@ useradd -m -s /bin/bash pguser
 echo "pguser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 echo ""
-echo "=== Copying local install.sh ==="
-cp /tmp/install.sh /usr/local/bin/install.sh
-chmod 755 /usr/local/bin/install.sh
+echo "=== Installing pg0 from local binary ==="
+cp /tmp/pg0-binary /usr/local/bin/pg0
+chmod 755 /usr/local/bin/pg0
 
 echo ""
-echo "=== Phase 1: Install pg0 and do initial extraction ==="
-su - pguser << EOF
+echo "=== Phase 1: Initial extraction with all deps present ==="
+su -s /bin/bash - pguser -c '
 set -e
-export PG0_BINARY_URL="${PG0_BINARY_URL}"
+export PATH="/usr/local/bin:$PATH"
 
-echo "=== Installing pg0 ==="
-bash /usr/local/bin/install.sh
-export PATH="\$HOME/.local/bin:\$PATH"
-
-echo ""
 echo "=== Starting PostgreSQL (initial extraction) ==="
 pg0 start
 sleep 3
 
-echo ""
 echo "=== Stopping PostgreSQL ==="
 pg0 stop
 sleep 1
 
-echo ""
 echo "=== Removing extracted installation to force re-extraction ==="
 rm -rf ~/.pg0/installation
 echo "Installation directory cleared."
-EOF
+'
 
 echo ""
 echo "=== Phase 2: Remove libxml2 to simulate missing library ==="
@@ -79,33 +72,32 @@ apt-get remove -y libxml2 2>&1 | tail -3
 
 echo ""
 echo "=== Phase 3: Verify pg0 detects missing libraries ==="
-su - pguser << EOF
+su -s /bin/bash - pguser -c '
 set -e
-export PATH="\$HOME/.local/bin:\$PATH"
+export PATH="/usr/local/bin:$PATH"
 
 echo "=== Starting pg0 (should fail with missing library error) ==="
-OUTPUT=\$(pg0 start 2>&1 || true)
-EXIT_CODE=\${PIPESTATUS[0]:-\$?}
-echo "\$OUTPUT"
+OUTPUT=$(pg0 start 2>&1 || true)
+echo "$OUTPUT"
 
 echo ""
 echo "=== Checking error message ==="
 
-if echo "\$OUTPUT" | grep -q "missing required system libraries"; then
-    echo "PASS: Found 'missing required system libraries' message"
+if echo "$OUTPUT" | grep -q "missing required system libraries"; then
+    echo "PASS: Found missing required system libraries message"
 else
     echo "FAIL: Missing expected error message about shared libraries"
     exit 1
 fi
 
-if echo "\$OUTPUT" | grep -q "libxml2"; then
-    echo "PASS: Found 'libxml2' in the missing library list"
+if echo "$OUTPUT" | grep -qi "libxml2"; then
+    echo "PASS: Found libxml2 in the missing library list"
 else
     echo "FAIL: Expected libxml2 to be listed as missing"
     exit 1
 fi
 
-if echo "\$OUTPUT" | grep -q "Install the missing libraries"; then
+if echo "$OUTPUT" | grep -q "Install the missing libraries"; then
     echo "PASS: Found install guidance message"
 else
     echo "FAIL: Missing install guidance"
@@ -116,8 +108,15 @@ echo ""
 echo "============================================="
 echo "ALL CHECKS PASSED - Missing libs detected"
 echo "============================================="
-EOF
 '
+INNERSCRIPT
+
+docker run --rm --platform=linux/amd64 \
+  -v "$PG0_BINARY_PATH:/tmp/pg0-binary:ro" \
+  -v "$TEMP_SCRIPT:/tmp/test_script.sh:ro" \
+  python:3.11-slim bash /tmp/test_script.sh
+
+rm -f "$TEMP_SCRIPT"
 
 echo ""
 echo "Test completed successfully!"

@@ -78,6 +78,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust
+        if: matrix.platform == 'missing-libs-debian-amd64'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Linux binary
+        if: matrix.platform == 'missing-libs-debian-amd64'
+        run: |
+          cargo build --release
+          echo "PG0_BINARY_PATH=$(pwd)/target/release/pg0" >> $GITHUB_ENV
+
       - name: Run CLI Docker test
         run: |
           chmod +x ${{ matrix.cli_script }}
