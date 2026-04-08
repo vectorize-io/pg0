@@ -71,6 +71,9 @@ jobs:
           - platform: alpine-amd64
             cli_script: docker-tests/test_alpine_amd64.sh
             python_script: docker-tests/python/test_alpine_amd64.sh
+          - platform: missing-libs-debian-amd64
+            cli_script: docker-tests/test_missing_libs.sh
+            python_script: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +84,7 @@ jobs:
           bash ${{ matrix.cli_script }}
 
       - name: Run Python SDK Docker test
+        if: matrix.python_script != ''
         run: |
           chmod +x ${{ matrix.python_script }}
           bash ${{ matrix.python_script }}

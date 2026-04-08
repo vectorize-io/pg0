@@ -50,6 +50,7 @@ run_test "Debian AMD64" "$DIR/test_debian_amd64.sh"
 run_test "Debian ARM64" "$DIR/test_debian_arm64.sh"
 run_test "Alpine AMD64" "$DIR/test_alpine_amd64.sh"
 run_test "Alpine ARM64" "$DIR/test_alpine_arm64.sh"
+run_test "Missing Libs Detection (Debian AMD64)" "$DIR/test_missing_libs.sh"
 
 # Print summary
 echo ""

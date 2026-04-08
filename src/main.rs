@@ -452,8 +452,51 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
         }
     }
 
+    // Check for missing shared libraries on Linux
+    #[cfg(target_os = "linux")]
+    check_shared_libraries(&bin_dir)?;
+
     println!("PostgreSQL {} extracted successfully.", pg_version);
     Ok(version_dir)
+}
+
+/// Check that the postgres binary can find all required shared libraries.
+/// Only called on Linux. If ldd is unavailable, silently skips the check.
+#[cfg(target_os = "linux")]
+fn check_shared_libraries(bin_dir: &Path) -> Result<(), CliError> {
+    let postgres_path = bin_dir.join("postgres");
+    let output = match std::process::Command::new("ldd")
+        .arg(&postgres_path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => {
+            tracing::debug!("Could not run ldd to check shared libraries: {}", e);
+            return Ok(());
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let missing: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.contains("not found"))
+        .map(|line| line.trim())
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let missing_list = missing.join("\n  ");
+    Err(CliError::Other(format!(
+        "The bundled PostgreSQL binary is missing required system libraries:\n  \
+         {}\n\n\
+         Install the missing libraries using your system package manager. For example:\n  \
+         Arch Linux:    sudo pacman -S <package>\n  \
+         Ubuntu/Debian: sudo apt install <package>\n  \
+         Fedora/RHEL:   sudo dnf install <package>",
+        missing_list
+    )))
 }
 
 /// Install pgvector extension files into the PostgreSQL installation
