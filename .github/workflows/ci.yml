@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build CLI
@@ -25,8 +29,8 @@ jobs:
           name: pg0-macos
           path: target/release/pg0
 
-  sdk-tests:
-    name: SDK Tests (macOS)
+  python-sdk-tests:
+    name: Python SDK Tests (macOS)
     needs: build
     runs-on: macos-latest
     steps:
@@ -55,6 +59,43 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv pip install --system -e ".[dev]"
           pytest tests/ -v
+
+  node-sdk-tests:
+    name: Node.js SDK Tests (macOS)
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download CLI
+        uses: actions/download-artifact@v4
+        with:
+          name: pg0-macos
+          path: ~/.local/bin
+
+      - name: Make CLI executable
+        run: chmod +x ~/.local/bin/pg0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: sdk/node/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdk/node
+        run: npm ci
+
+      - name: Build
+        working-directory: sdk/node
+        run: npm run build
+
+      - name: Run tests
+        working-directory: sdk/node
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          npm test
 
   # Docker tests - one job per platform, runs both CLI and Python SDK tests
   # Note: ARM64 tests are skipped because QEMU emulation is too slow for PostgreSQL setup
