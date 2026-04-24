@@ -82,6 +82,7 @@ jobs:
     name: SDK Tests (Windows)
     needs: build-windows
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
