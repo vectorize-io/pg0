@@ -118,13 +118,18 @@ release_cli() {
     sed -i.bak "s/^version = \".*\"/version = \"$version\"/" Cargo.toml
     rm -f Cargo.toml.bak
 
+    # Sync Cargo.lock so the committed lockfile matches Cargo.toml.
+    # --offline avoids network and skips build.rs entirely.
+    echo "Syncing Cargo.lock to $version..."
+    cargo update -p pg0 --offline
+
     # Update version in pyproject.toml
     echo "Updating pyproject.toml version to $version..."
     sed -i.bak "s/^version = \".*\"/version = \"$version\"/" sdk/python/pyproject.toml
     rm -f sdk/python/pyproject.toml.bak
 
     # Commit and tag
-    git add Cargo.toml sdk/python/pyproject.toml
+    git add Cargo.toml Cargo.lock sdk/python/pyproject.toml
     git commit -m "chore: bump CLI version to $version"
     git tag -a "$tag" -m "Release $version"
 
