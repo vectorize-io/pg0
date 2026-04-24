@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,11 +131,35 @@ def _run_pg0(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run a pg0 command."""
     pg0_path = _find_pg0()
     try:
-        result = subprocess.run(
-            [pg0_path, *args],
-            capture_output=True,
-            text=True,
-        )
+        if sys.platform == "win32":
+            # On Windows, `pg0 start` spawns PostgreSQL which inherits pg0's
+            # stdio handles. pg0 exits but PostgreSQL keeps writing to those
+            # handles, so Python's capture_output=True pipes never see EOF
+            # and subprocess.run hangs forever. Route stdio through real
+            # files instead — subprocess.run only waits on the process exit
+            # code, not on file handles held by grandchildren.
+            with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+                rc = subprocess.call(
+                    [pg0_path, *args],
+                    stdout=out_f,
+                    stderr=err_f,
+                )
+                out_f.seek(0)
+                err_f.seek(0)
+                stdout = out_f.read().decode("utf-8", errors="replace")
+                stderr = err_f.read().decode("utf-8", errors="replace")
+            result = subprocess.CompletedProcess(
+                args=[pg0_path, *args],
+                returncode=rc,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        else:
+            result = subprocess.run(
+                [pg0_path, *args],
+                capture_output=True,
+                text=True,
+            )
         if check and result.returncode != 0:
             stderr = result.stderr.strip()
             if "already running" in stderr.lower():

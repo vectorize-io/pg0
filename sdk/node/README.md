@@ -18,7 +18,7 @@ import { Pg0 } from "@vectorize-io/pg0";
 // Basic usage
 const pg = new Pg0();
 await pg.start();
-console.log(await pg.getUri()); // postgresql://postgres:postgres@localhost:5432/postgres
+console.log(await pg.getUri()); // postgresql://postgres:postgres@127.0.0.1:5432/postgres
 await pg.execute("CREATE EXTENSION IF NOT EXISTS vector");
 await pg.stop();
 
