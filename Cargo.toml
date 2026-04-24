@@ -1,6 +1,6 @@
 [package]
 name = "pg0"
-version = "0.12.3"
+version = "0.13.0"
 edition = "2021"
 description = "Zero-dependency CLI to run embedded PostgreSQL locally without installation"
 license = "MIT"
