@@ -111,16 +111,7 @@ fn bundle_pgvector(pg_version: &str, pgvector_tag: &str, pgvector_repo: &str, ou
         "x86_64-unknown-linux-musl" => "x86_64-unknown-linux-gnu", // musl uses gnu pgvector
         "aarch64-unknown-linux-gnu" => "aarch64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl" => "aarch64-unknown-linux-gnu", // musl uses gnu pgvector
-        "x86_64-pc-windows-msvc" => {
-            eprintln!("Warning: pgvector not available for Windows, skipping bundle");
-            let marker = out_dir.join("pgvector_bundle.tar.gz");
-            fs::write(&marker, b"").expect("Failed to create empty pgvector marker");
-            println!(
-                "cargo:rustc-env=PGVECTOR_BUNDLE_PATH={}",
-                marker.display()
-            );
-            return;
-        }
+        "x86_64-pc-windows-msvc" => "x86_64-pc-windows-msvc",
         _ => {
             eprintln!(
                 "Warning: Unknown target {}, pgvector will not be bundled",

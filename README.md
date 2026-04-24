@@ -73,7 +73,7 @@ from pg0 import Pg0
 # Start PostgreSQL
 pg = Pg0()
 pg.start()
-print(pg.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+print(pg.uri)  # postgresql://postgres:postgres@127.0.0.1:5432/postgres
 
 # Or use context manager
 with Pg0() as pg:

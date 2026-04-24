@@ -17,7 +17,7 @@ from pg0 import Pg0
 
 # Basic usage
 with Pg0() as pg:
-    print(pg.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+    print(pg.uri)  # postgresql://postgres:postgres@127.0.0.1:5432/postgres
     pg.execute("CREATE EXTENSION IF NOT EXISTS vector")
     pg.execute("SELECT version()")
 
@@ -69,11 +69,11 @@ pg = Pg0()
 pg.start()
 
 # Using the uri property
-print(pg.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+print(pg.uri)  # postgresql://postgres:postgres@127.0.0.1:5432/postgres
 
 # Or using info()
 info = pg.info()
-print(info.uri)  # postgresql://postgres:postgres@localhost:5432/postgres
+print(info.uri)  # postgresql://postgres:postgres@127.0.0.1:5432/postgres
 print(info.port)  # 5432
 print(info.username)  # postgres
 print(info.database)  # postgres

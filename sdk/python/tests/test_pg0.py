@@ -2,6 +2,7 @@
 
 import os
 import signal
+import sys
 import time
 
 import pytest
@@ -151,6 +152,10 @@ class TestPg0:
             pg2.stop()
             pg0.drop(f"{TEST_NAME}-2")
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="signal.SIGKILL does not exist on Windows; crash-recovery behavior is exercised by the Unix matrix.",
+    )
     def test_data_survives_crash(self, clean_instance):
         """Test that data is preserved after an unclean shutdown (SIGKILL).
 

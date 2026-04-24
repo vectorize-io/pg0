@@ -23,6 +23,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 flate2 = "1"
 tar = "0.4"
 
+# ZIP extraction for the Windows PostgreSQL bundle, which theseus-rs ships as
+# .zip (unlike every other platform's tar.gz). Only pulled in on Windows
+# targets to avoid bloating other platforms' binaries.
+[target.'cfg(windows)'.dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [profile.release]
 strip = true
 lto = true

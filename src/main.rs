@@ -360,6 +360,80 @@ fn read_latest_pg_log(data_dir: &PathBuf) -> Option<String> {
     }
 }
 
+/// Name of the main PostgreSQL server binary for the current target platform.
+/// theseus-rs bundles `postgres.exe` on Windows and `postgres` everywhere else.
+#[cfg(windows)]
+const POSTGRES_BINARY: &str = "postgres.exe";
+#[cfg(not(windows))]
+const POSTGRES_BINARY: &str = "postgres";
+
+/// Extract the embedded bundle into `version_dir`, stripping the top-level
+/// directory entry (e.g. "postgresql-18.1.0-<target>/"). theseus-rs publishes
+/// the Windows bundle as a ZIP and every other platform as tar.gz.
+#[cfg(not(windows))]
+fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> Result<(), CliError> {
+    let decoder = GzDecoder::new(bundle);
+    let mut archive = Archive::new(decoder);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+
+        let stripped_path: PathBuf = path.components().skip(1).collect();
+        if stripped_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let dest_path = version_dir.join(&stripped_path);
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        if entry.header().entry_type().is_dir() {
+            fs::create_dir_all(&dest_path)?;
+        } else {
+            entry.unpack(&dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> Result<(), CliError> {
+    use std::io::Cursor;
+    let reader = Cursor::new(bundle);
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|e| CliError::Other(format!("Failed to read PostgreSQL ZIP archive: {}", e)))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| CliError::Other(format!("Failed to read ZIP entry {}: {}", i, e)))?;
+
+        let entry_path = match entry.enclosed_name() {
+            Some(p) => p.to_path_buf(),
+            None => continue, // Skip unsafe / absolute / traversal-containing names
+        };
+
+        let stripped_path: PathBuf = entry_path.components().skip(1).collect();
+        if stripped_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let dest_path = version_dir.join(&stripped_path);
+        if entry.is_dir() {
+            fs::create_dir_all(&dest_path)?;
+        } else {
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut out = fs::File::create(&dest_path)?;
+            std::io::copy(&mut entry, &mut out)?;
+        }
+    }
+    Ok(())
+}
+
 /// Extract the bundled PostgreSQL to the installation directory
 /// Returns the path to the version-specific directory (e.g., ~/.pg0/installation/18.1.0)
 fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> Result<PathBuf, CliError> {
@@ -367,7 +441,7 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
 
     // Check if already extracted
     let bin_dir = version_dir.join("bin");
-    if bin_dir.exists() && bin_dir.join("postgres").exists() {
+    if bin_dir.exists() && bin_dir.join(POSTGRES_BINARY).exists() {
         tracing::debug!("PostgreSQL already extracted at {}", version_dir.display());
         return Ok(version_dir);
     }
@@ -381,41 +455,13 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
     println!("Extracting bundled PostgreSQL {}...", pg_version);
     fs::create_dir_all(&version_dir)?;
 
-    // Extract the tar.gz bundle
-    // The archive contains paths like "postgresql-18.1.0-aarch64-apple-darwin/bin/postgres"
-    // We need to extract to version_dir, stripping the first path component
-    let decoder = GzDecoder::new(POSTGRESQL_BUNDLE);
-    let mut archive = Archive::new(decoder);
-
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?;
-
-        // Strip the first component (e.g., "postgresql-18.1.0-aarch64-apple-darwin")
-        let stripped_path: PathBuf = path.components().skip(1).collect();
-        if stripped_path.as_os_str().is_empty() {
-            continue; // Skip the root directory entry
-        }
-
-        let dest_path = version_dir.join(&stripped_path);
-
-        // Create parent directories if needed
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        // Extract the entry
-        if entry.header().entry_type().is_dir() {
-            fs::create_dir_all(&dest_path)?;
-        } else {
-            entry.unpack(&dest_path)?;
-        }
-    }
+    extract_postgresql_archive(POSTGRESQL_BUNDLE, &version_dir)?;
 
     // Verify extraction
-    if !bin_dir.join("postgres").exists() {
+    if !bin_dir.join(POSTGRES_BINARY).exists() {
         return Err(CliError::Other(format!(
-            "PostgreSQL extraction failed - postgres binary not found at {}",
+            "PostgreSQL extraction failed - {} not found at {}",
+            POSTGRES_BINARY,
             bin_dir.display()
         )));
     }
@@ -639,6 +685,13 @@ fn start(
     configuration.insert("log_rotation_age".to_string(), "1d".to_string());
     configuration.insert("log_rotation_size".to_string(), "100MB".to_string());
 
+    // Pin timezone to UTC so PostgreSQL never reads the tzdata directory at startup.
+    // The theseus-rs binaries are compiled with --with-system-tzdata=/usr/share/zoneinfo,
+    // which doesn't exist on NixOS (tzdata lives at /etc/zoneinfo) and causes a FATAL
+    // "could not find a suitable time zone abbreviations file" on server start.
+    configuration.insert("timezone".to_string(), "UTC".to_string());
+    configuration.insert("log_timezone".to_string(), "UTC".to_string());
+
     // Parse and apply custom config options (these override defaults)
     for cfg in &config {
         if let Some((key, value)) = cfg.split_once('=') {
@@ -696,7 +749,7 @@ fn start(
             username, username, password.replace('\'', "''")
         );
         let status = std::process::Command::new(&psql_path)
-            .arg(&format!("postgresql://postgres:{}@localhost:{}/postgres", password, port))
+            .arg(&format!("postgresql://postgres:{}@127.0.0.1:{}/postgres", password, port))
             .arg("-c")
             .arg(&create_user_sql)
             .status()?;
@@ -720,7 +773,7 @@ fn start(
             let psql_path = find_psql_binary(&installation_dir)?;
             let grant_sql = format!("GRANT ALL PRIVILEGES ON DATABASE \"{}\" TO \"{}\";", database, username);
             let _ = std::process::Command::new(&psql_path)
-                .arg(&format!("postgresql://postgres:{}@localhost:{}/postgres", password, port))
+                .arg(&format!("postgresql://postgres:{}@127.0.0.1:{}/postgres", password, port))
                 .arg("-c")
                 .arg(&grant_sql)
                 .status();
@@ -754,7 +807,7 @@ fn start(
     println!("  Data dir: {}", data_dir.display());
     println!();
     println!(
-        "Connection URI: postgresql://{}:{}@localhost:{}/{}",
+        "Connection URI: postgresql://{}:{}@127.0.0.1:{}/{}",
         username, password, port, database
     );
     println!();
@@ -910,7 +963,7 @@ fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
             let running = is_process_running(info.pid);
             if running {
                 let uri = format!(
-                    "postgresql://{}:{}@localhost:{}/{}",
+                    "postgresql://{}:{}@127.0.0.1:{}/{}",
                     info.username, info.password, info.port, info.database
                 );
                 InfoOutput {
@@ -989,10 +1042,12 @@ fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
 }
 
 fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
+    let psql_name = if cfg!(windows) { "psql.exe" } else { "psql" };
+
     // Look for psql in installation_dir/*/bin/psql (version subdirectory)
     if let Ok(entries) = fs::read_dir(installation_dir) {
         for entry in entries.flatten() {
-            let psql_path = entry.path().join("bin").join("psql");
+            let psql_path = entry.path().join("bin").join(psql_name);
             if psql_path.exists() {
                 return Ok(psql_path);
             }
@@ -1000,7 +1055,7 @@ fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
     }
 
     // Fallback: try direct path (in case structure changes)
-    let direct_path = installation_dir.join("bin").join("psql");
+    let direct_path = installation_dir.join("bin").join(psql_name);
     if direct_path.exists() {
         return Ok(direct_path);
     }
@@ -1008,7 +1063,8 @@ fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
     Err(CliError::Io(std::io::Error::new(
         std::io::ErrorKind::NotFound,
         format!(
-            "psql not found in {}",
+            "{} not found in {}",
+            psql_name,
             installation_dir.display()
         ),
     )))
@@ -1026,7 +1082,7 @@ fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
 
     // Build connection URI
     let uri = format!(
-        "postgresql://{}:{}@localhost:{}/{}",
+        "postgresql://{}:{}@127.0.0.1:{}/{}",
         info.username, info.password, info.port, info.database
     );
 
@@ -1211,7 +1267,7 @@ fn list(output_format: OutputFormat) -> Result<(), CliError> {
             let running = is_process_running(info.pid);
             let output = if running {
                 let uri = format!(
-                    "postgresql://{}:{}@localhost:{}/{}",
+                    "postgresql://{}:{}@127.0.0.1:{}/{}",
                     info.username, info.password, info.port, info.database
                 );
                 InfoOutput {
