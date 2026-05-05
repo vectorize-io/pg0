@@ -127,22 +127,32 @@ jobs:
           - platform: debian-amd64
             cli_script: docker-tests/test_debian_amd64.sh
             python_script: docker-tests/python/test_debian_amd64.sh
+            needs_local_binary: false
           - platform: alpine-amd64
             cli_script: docker-tests/test_alpine_amd64.sh
             python_script: docker-tests/python/test_alpine_amd64.sh
+            needs_local_binary: false
+          # Ubuntu 24.04 + 25.10. 25.10 only works with the libxml2/ICU
+          # bundling added in this binary, so the test must run against a
+          # fresh local build rather than the latest released artifact.
+          - platform: ubuntu-amd64
+            cli_script: docker-tests/test_ubuntu_amd64.sh
+            python_script: ""
+            needs_local_binary: true
           - platform: missing-libs-debian-amd64
             cli_script: docker-tests/test_missing_libs.sh
             python_script: ""
+            needs_local_binary: true
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        if: matrix.platform == 'missing-libs-debian-amd64'
+        if: matrix.needs_local_binary
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Linux binary
-        if: matrix.platform == 'missing-libs-debian-amd64'
+        if: matrix.needs_local_binary
         run: |
           cargo build --release
           echo "PG0_BINARY_PATH=$(pwd)/target/release/pg0" >> $GITHUB_ENV
