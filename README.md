@@ -498,7 +498,7 @@ The table below reflects what we actually exercise via the docker tests in `dock
 | Debian 13 (trixie) | x86_64, aarch64 | ✅ Expected to work | Same glibc / libxml2 ABI as bookworm |
 | Ubuntu 22.04 (Jammy) | x86_64, aarch64 | ✅ Expected to work | glibc 2.35 baseline; matches release CI build host |
 | Ubuntu 24.04 (Noble) | x86_64 | ✅ Tested | `docker-tests/test_ubuntu_amd64.sh` |
-| Ubuntu 25.10 (Plucky) | x86_64 | ✅ Tested | `docker-tests/test_ubuntu_amd64.sh` - works thanks to bundled libxml2.so.2 / ICU 74 |
+| Ubuntu 25.10 (Plucky) | x86_64 | ✅ Tested | `docker-tests/test_ubuntu_amd64.sh` - works thanks to bundled libxml2.so.2 + libicu70 |
 | Ubuntu 26.04 (next LTS) | x86_64, aarch64 | ✅ Expected to work | Inherits libxml2 2.14 / ICU 76 from 25.10 |
 | Alpine 3.20 | x86_64, aarch64 | ✅ Tested | `docker-tests/test_alpine_*.sh` (python:3.12-alpine3.20). Uses musl + system ICU 74 |
 | Alpine 3.21 | x86_64, aarch64 | ✅ Expected to work | Same ICU 74 line as 3.20 (untested but ABI-compatible) |

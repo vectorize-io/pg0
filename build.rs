@@ -179,18 +179,24 @@ fn download_file(url: &str, dest: &PathBuf) -> io::Result<()> {
     Ok(())
 }
 
-/// Bundle libxml2.so.2 and the ICU 74 .so files alongside PostgreSQL.
+/// Bundle libxml2.so.2 and its transitive ICU dependency alongside PostgreSQL.
 ///
-/// The theseus-rs PostgreSQL builds dynamic-link against libxml2.so.2 and
-/// libicu*.so.74. Both have been replaced upstream:
+/// The theseus-rs PostgreSQL build links against libxml2.so.2 (DT_NEEDED);
+/// libxml2 then pulls ICU in transitively. Both have been replaced upstream:
 ///   - libxml2 2.14 (Ubuntu 25.10+) bumped the SONAME to .so.16; there is no
 ///     .so.2 compat package.
-///   - ICU has moved to 76 in 25.10+ and 80+ on rolling distros.
+///   - ICU has moved to .so.74 in 24.04, .so.76 in 25.10+, and continues to
+///     drift forward.
 ///
-/// We download the matching .so files from Ubuntu 24.04's archive at build
-/// time, repack them into a single tar.gz, and embed that into the pg0 binary.
-/// At runtime, main.rs extracts them next to the bundled postgres binary and
-/// adds that directory to LD_LIBRARY_PATH.
+/// We download libxml2 + the matching libicu .deb files from Ubuntu 22.04's
+/// archive at build time, repack them into a single tar.gz, and embed that
+/// into the pg0 binary. Ubuntu 22.04 is chosen because its libs require at
+/// most GLIBC 2.34, keeping us inside the manylinux_2_35 wheel baseline -
+/// Ubuntu 24.04's libs would require GLIBC 2.38 and break users on 22.04 /
+/// Debian 12.
+///
+/// At runtime, main.rs extracts the libs next to the bundled postgres binary
+/// and prepends that directory to LD_LIBRARY_PATH.
 ///
 /// Only Linux GNU targets get a non-empty bundle. Other targets get an empty
 /// bundle file so the include_bytes! macro in main.rs has something to point
@@ -223,21 +229,25 @@ fn bundle_runtime_libs(versions: &HashMap<String, String>, out_dir: &PathBuf) {
                 .get(&format!("LIBXML2_DEB_SHA256_{}", arch))
                 .expect("missing LIBXML2_DEB_SHA256")
                 .clone(),
-            wanted: vec!["libxml2.so.2.9.14".to_string()],
+            // Ubuntu 22.04 ships libxml2.so.2 -> libxml2.so.2.9.13.
+            wanted: vec!["libxml2.so.2.9.13".to_string()],
         },
         DebSpec {
             url: versions
-                .get(&format!("LIBICU74_DEB_URL_{}", arch))
-                .expect("missing LIBICU74_DEB_URL")
+                .get(&format!("LIBICU_DEB_URL_{}", arch))
+                .expect("missing LIBICU_DEB_URL")
                 .clone(),
             sha256: versions
-                .get(&format!("LIBICU74_DEB_SHA256_{}", arch))
-                .expect("missing LIBICU74_DEB_SHA256")
+                .get(&format!("LIBICU_DEB_SHA256_{}", arch))
+                .expect("missing LIBICU_DEB_SHA256")
                 .clone(),
+            // Ubuntu 22.04 ships libicu70.1 (matching the .so.70 SONAME).
+            // libxml2.so.2 only directly needs libicuuc, but libicuuc itself
+            // pulls in libicudata; libicui18n is included for completeness.
             wanted: vec![
-                "libicudata.so.74.2".to_string(),
-                "libicui18n.so.74.2".to_string(),
-                "libicuuc.so.74.2".to_string(),
+                "libicudata.so.70.1".to_string(),
+                "libicui18n.so.70.1".to_string(),
+                "libicuuc.so.70.1".to_string(),
             ],
         },
     ];

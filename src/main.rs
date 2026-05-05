@@ -17,9 +17,10 @@ static POSTGRESQL_BUNDLE: &[u8] = include_bytes!(env!("POSTGRESQL_BUNDLE_PATH"))
 /// The embedded pgvector bundle
 static PGVECTOR_BUNDLE: &[u8] = include_bytes!(env!("PGVECTOR_BUNDLE_PATH"));
 
-/// Extra runtime libraries (libxml2.so.2, libicu*.so.74) that the bundled
-/// PostgreSQL binary dynamic-links against. Empty on platforms where the host
-/// reliably provides them (macOS, Windows, Alpine/musl). See build.rs.
+/// Extra runtime libraries (libxml2.so.2 + the libicu major it transitively
+/// loads) that the bundled PostgreSQL binary dynamic-links against. Empty on
+/// platforms where the host reliably provides them (macOS, Windows,
+/// Alpine/musl). See build.rs.
 static RUNTIME_LIBS_BUNDLE: &[u8] = include_bytes!(env!("RUNTIME_LIBS_BUNDLE_PATH"));
 
 #[derive(Error, Debug)]
@@ -585,8 +586,8 @@ fn ensure_runtime_libs(version_dir: &Path) -> Result<(), CliError> {
 }
 
 /// Given a fully-versioned shared-library filename like
-/// `libxml2.so.2.9.14` or `libicudata.so.74.2`, return the SONAME the dynamic
-/// linker actually resolves: `libxml2.so.2`, `libicudata.so.74`. Returns None
+/// `libxml2.so.2.9.13` or `libicudata.so.70.1`, return the SONAME the dynamic
+/// linker actually resolves: `libxml2.so.2`, `libicudata.so.70`. Returns None
 /// for filenames we don't recognise (so we don't accidentally create bogus
 /// symlinks).
 fn soname_for(filename: &str) -> Option<String> {
