@@ -67,8 +67,12 @@ echo "Installation directory cleared."
 '
 
 echo ""
-echo "=== Phase 2: Remove libxml2 to simulate missing library ==="
-apt-get remove -y libxml2 2>&1 | tail -3
+echo "=== Phase 2: Remove libgssapi-krb5-2 to simulate missing library ==="
+# libxml2.so.2 is bundled inside the pg0 binary, so removing the system
+# package no longer surfaces a missing-lib error. libgssapi-krb5-2 is one of
+# the deps we expect users to install themselves, so removing it still hits
+# the detection code path.
+apt-get remove -y libgssapi-krb5-2 2>&1 | tail -3
 
 echo ""
 echo "=== Phase 3: Verify pg0 detects missing libraries ==="
@@ -90,10 +94,10 @@ else
     exit 1
 fi
 
-if echo "$OUTPUT" | grep -qi "libxml2"; then
-    echo "PASS: Found libxml2 in the missing library list"
+if echo "$OUTPUT" | grep -qi "libgssapi_krb5"; then
+    echo "PASS: Found libgssapi_krb5 in the missing library list"
 else
-    echo "FAIL: Expected libxml2 to be listed as missing"
+    echo "FAIL: Expected libgssapi_krb5 to be listed as missing"
     exit 1
 fi
 

@@ -10,6 +10,7 @@ Automated tests to verify pg0 works correctly across different platforms and dis
 | `test_debian_arm64.sh` | python:3.11-slim | linux/arm64 | aarch64 | glibc |
 | `test_alpine_amd64.sh` | python:3.12-alpine3.20 | linux/amd64 | x86_64 | musl |
 | `test_alpine_arm64.sh` | python:3.12-alpine3.20 | linux/arm64 | aarch64 | musl |
+| `test_ubuntu_amd64.sh` | ubuntu:24.04 + ubuntu:25.10 | linux/amd64 | x86_64 | glibc |
 
 ## Python SDK Tests
 

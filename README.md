@@ -22,14 +22,17 @@ Use pg0 for local development, testing, CI/CD pipelines, or any scenario where y
 
 ## Supported Platforms
 
+This table describes which **binaries** we publish. Whether a binary actually runs on a given OS release depends on the libraries that distro ships - see [Tested and Supported Platforms](#tested-and-supported-platforms) for the per-distribution story (e.g. Alpine 3.20-3.21 work, Alpine 3.22+ does not).
+
 | Platform | Architecture | Binary |
 |----------|--------------|--------|
-| macOS | Apple Silicon (M1/M2/M3) | `pg0-macos-arm64` |
-| Linux | x86_64 (glibc) | `pg0-linux-amd64-gnu` |
-| Linux | x86_64 (musl/Alpine) | `pg0-linux-amd64-musl` |
-| Linux | ARM64 (glibc) | `pg0-linux-arm64-gnu` |
-| Linux | ARM64 (musl/Alpine) | `pg0-linux-arm64-musl` |
-| Windows | x64 | `pg0-windows-amd64.exe` |
+| macOS | Apple Silicon (M1/M2/M3) | `pg0-darwin-aarch64` |
+| macOS | Intel | `pg0-darwin-x86_64` |
+| Linux | x86_64 (glibc, e.g. Debian/Ubuntu) | `pg0-linux-x86_64-gnu` |
+| Linux | x86_64 (musl, e.g. Alpine) | `pg0-linux-x86_64-musl` |
+| Linux | ARM64 (glibc) | `pg0-linux-aarch64-gnu` |
+| Linux | ARM64 (musl) | `pg0-linux-aarch64-musl` |
+| Windows | x64 | `pg0-windows-x86_64.exe` |
 
 ## Features
 
@@ -119,15 +122,19 @@ pg0 works in Docker containers. Here are the minimal setup steps for each suppor
 
 ```dockerfile
 FROM debian:bookworm-slim
-# or: python:3.11-slim, ubuntu:22.04, etc.
+# or: python:3.11-slim, ubuntu:22.04, ubuntu:24.04, ubuntu:25.10, etc.
 
-# Install required dependencies
+# Install required dependencies. libxml2 and ICU are bundled into the pg0
+# binary so they do not need to be installed - this means pg0 works on
+# Ubuntu 25.10+ where libxml2.so.2 has been replaced by libxml2.so.16.
+# tzdata is needed because PostgreSQL reads /usr/share/zoneinfo at startup,
+# and libreadline is needed by `pg0 psql`.
 RUN apt-get update && apt-get install -y \
     curl \
-    libxml2 \
     libssl3 \
     libgssapi-krb5-2 \
-    && apt-get install -y libicu72 || apt-get install -y libicu74 || apt-get install -y libicu* \
+    tzdata \
+    libreadline8 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (PostgreSQL cannot run as root)
@@ -182,10 +189,10 @@ docker run -d myimage sh -c "pg0 start && exec your-application"
 Run pg0 in a Docker container with a single command:
 
 ```bash
-# Debian/Ubuntu
+# Debian/Ubuntu (works on 22.04, 24.04, 25.10, 26.04, ...)
 docker run --rm -it python:3.11-slim bash -c '
   apt-get update -qq &&
-  apt-get install -y curl libxml2 libssl3 libgssapi-krb5-2 libicu72 &&
+  apt-get install -y curl libssl3 libgssapi-krb5-2 tzdata libreadline8 &&
   useradd -m pguser &&
   su - pguser -c "curl -fsSL https://raw.githubusercontent.com/vectorize-io/pg0/main/install.sh | bash &&
     export PATH=\"\$HOME/.local/bin:\$PATH\" &&
@@ -448,33 +455,58 @@ Data is stored in `~/.pg0/instances/<name>/data/` (or your custom `--data-dir`) 
 
 ## Runtime Dependencies
 
-pg0 bundles PostgreSQL but requires some shared libraries at runtime. These are typically pre-installed on most systems, but may need to be added in minimal environments like Docker.
+pg0 bundles PostgreSQL, pgvector, libxml2 and ICU directly into the binary, so it works on minimal systems without those libraries installed (including Ubuntu 25.10+ where the libxml2 SONAME was bumped to `.so.16`). A few common shared libraries still need to be present on the host because they are reused from the OS.
 
 **macOS:** No additional dependencies required.
 
 **Linux (Debian/Ubuntu):**
 ```bash
-apt-get install libxml2 libssl3 libgssapi-krb5-2
+apt-get install libssl3 libgssapi-krb5-2 tzdata libreadline8
 ```
 
 **Linux (Alpine):**
 ```bash
 apk add icu-libs lz4-libs libxml2
 ```
+(Alpine uses the musl pg0 binary, which dynamically links against system ICU and libxml2. See the support table below for compatible Alpine versions.)
 
 ### Why these dependencies?
 
 The bundled PostgreSQL binaries are compiled with these features enabled:
 
-| Library | Purpose | Can disable? |
-|---------|---------|--------------|
-| OpenSSL (`libssl`) | SSL/TLS connections | Not recommended |
-| GSSAPI (`libgssapi-krb5`) | Kerberos authentication | Rarely needed locally |
-| libxml2 | XML data type and functions | Rarely needed |
-| ICU (`icu-libs`) | Unicode collation (Alpine only) | glibc builds don't need it |
-| LZ4 (`lz4-libs`) | WAL/TOAST compression | Small impact |
+| Library | Purpose | Bundled in pg0? |
+|---------|---------|-----------------|
+| libxml2 | XML data type and functions | Yes (Linux GNU only) |
+| ICU (`libicu*`) | Unicode collation | Yes (Linux GNU only); Alpine uses system `icu-libs` |
+| OpenSSL (`libssl`) | SSL/TLS connections | No - host-provided |
+| GSSAPI (`libgssapi-krb5`) | Kerberos authentication | No - host-provided |
+| LZ4 (`lz4-libs`) | WAL/TOAST compression | No - usually pre-installed |
+| tzdata (`/usr/share/zoneinfo`) | Time zone data | No - host-provided |
+| Readline (`libreadline`) | Interactive `pg0 psql` | No - host-provided |
 
 Most desktop Linux distributions and macOS have these libraries pre-installed. You only need to install them manually in minimal Docker images or bare-metal servers.
+
+## Tested and Supported Platforms
+
+The table below reflects what we actually exercise via the docker tests in `docker-tests/` plus the platforms targeted by the release CI. Anything not in the table is best-effort: it may work, but we do not test it.
+
+| Platform / Image | Architecture | Status | Notes |
+|---|---|---|---|
+| macOS (Apple Silicon, M1/M2/M3) | aarch64 | ✅ Supported | Released binary; built in CI |
+| macOS (Intel) | x86_64 | ✅ Supported | Released binary; built in CI |
+| Debian 12 (bookworm) | x86_64, aarch64 | ✅ Tested | `docker-tests/test_debian_*.sh` (python:3.11-slim) |
+| Debian 13 (trixie) | x86_64, aarch64 | ✅ Expected to work | Same glibc / libxml2 ABI as bookworm |
+| Ubuntu 22.04 (Jammy) | x86_64, aarch64 | ✅ Expected to work | glibc 2.35 baseline; matches release CI build host |
+| Ubuntu 24.04 (Noble) | x86_64 | ✅ Tested | `docker-tests/test_ubuntu_amd64.sh` |
+| Ubuntu 25.10 (Plucky) | x86_64 | ✅ Tested | `docker-tests/test_ubuntu_amd64.sh` - works thanks to bundled libxml2.so.2 / ICU 74 |
+| Ubuntu 26.04 (next LTS) | x86_64, aarch64 | ✅ Expected to work | Inherits libxml2 2.14 / ICU 76 from 25.10 |
+| Alpine 3.20 | x86_64, aarch64 | ✅ Tested | `docker-tests/test_alpine_*.sh` (python:3.12-alpine3.20). Uses musl + system ICU 74 |
+| Alpine 3.21 | x86_64, aarch64 | ✅ Expected to work | Same ICU 74 line as 3.20 (untested but ABI-compatible) |
+| Alpine 3.22, 3.23+ | x86_64, aarch64 | ❌ Not supported | Ships ICU 76; the upstream theseus-rs musl PostgreSQL binary is built against ICU 74 and there is no compat package on Alpine. Use Alpine 3.20 or 3.21 instead |
+| Windows 10/11 | x86_64 | ✅ Supported | Released binary; built in CI |
+| NixOS | x86_64, aarch64 | ✅ Supported | Timezone pinned to UTC since v0.13.0 ([#11](https://github.com/vectorize-io/pg0/issues/11)) |
+| Any environment that runs as root only (e.g. Google Colab, restricted containers) | any | ❌ Not supported | PostgreSQL refuses to run as root - see [Troubleshooting](#postgresql-cannot-run-as-root) |
+| Linux with glibc < 2.35 | any | ⚠️ Auto-fallback | The install script switches to the statically-linked musl binary; pgvector is not available in that mode |
 
 ## Troubleshooting
 

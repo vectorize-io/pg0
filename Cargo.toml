@@ -29,6 +29,17 @@ tar = "0.4"
 [target.'cfg(windows)'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[build-dependencies]
+# .deb files are ar archives wrapping a zstd-compressed tar; we crack them open
+# at build time to extract libxml2.so.2 and the ICU 74 .so files so they can
+# be bundled into the pg0 binary.
+ar = "0.9"
+zstd = "0.13"
+tar = "0.4"
+flate2 = "1"
+sha2 = "0.10"
+hex = "0.4"
+
 [profile.release]
 strip = true
 lto = true
