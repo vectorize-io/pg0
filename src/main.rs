@@ -893,13 +893,12 @@ fn start(
 
     // Create the database if it doesn't exist and it's not the default 'postgres'
     if database != "postgres" {
-        println!("Creating database '{}'...", database);
-        if let Err(e) = postgresql.create_database(&database) {
-            // Ignore error if database already exists
-            let err_str = e.to_string();
-            if !err_str.contains("already exists") {
-                return Err(e.into());
-            }
+        // Pre-check existence rather than relying on the duplicate-database error
+        // string, which is localized by PostgreSQL's lc_messages (e.g. on Windows
+        // with a Chinese locale: `数据库 "x" 已经存在`). See vectorize-io/pg0#13.
+        if !postgresql.database_exists(&database)? {
+            println!("Creating database '{}'...", database);
+            postgresql.create_database(&database)?;
         }
         // Grant privileges to the user on the database
         if username != "postgres" {

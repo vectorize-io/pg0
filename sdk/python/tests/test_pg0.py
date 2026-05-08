@@ -152,6 +152,29 @@ class TestPg0:
             pg2.stop()
             pg0.drop(f"{TEST_NAME}-2")
 
+    def test_restart_with_custom_database(self, clean_instance):
+        """Restarting an instance with a non-default database must be idempotent.
+
+        Regression test for https://github.com/vectorize-io/pg0/issues/13
+        Previously, the second start failed because pg0 only matched the English
+        substring "already exists" when CREATE DATABASE returned a duplicate
+        error, so restarts on PostgreSQL builds with a non-English lc_messages
+        (e.g. Chinese on Windows: `数据库 "x" 已经存在`) crashed startup.
+        """
+        pg = Pg0(name=TEST_NAME, port=TEST_PORT, database="testdb")
+        pg.start()
+        pg.execute("CREATE TABLE restart_test (id int);")
+        pg.execute("INSERT INTO restart_test VALUES (42);")
+        pg.stop()
+
+        # Second start must succeed and preserve data
+        info = pg.start()
+        assert info.running is True
+        assert "testdb" in info.uri
+        result = pg.execute("SELECT id FROM restart_test;")
+        assert "42" in result
+        pg.stop()
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="signal.SIGKILL does not exist on Windows; crash-recovery behavior is exercised by the Unix matrix.",
