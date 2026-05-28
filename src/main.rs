@@ -104,6 +104,12 @@ enum Commands {
         /// Instance name
         #[arg(long, default_value = DEFAULT_INSTANCE_NAME)]
         name: String,
+
+        /// Maximum seconds to wait for graceful shutdown before sending SIGKILL.
+        /// Matches `pg_ctl -w -t <timeout>` semantics; the command does not return
+        /// until the postmaster has exited and postmaster.pid is gone.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
     },
     /// Drop an instance (stop if running, delete all data)
     Drop {
@@ -955,7 +961,62 @@ fn start(
     Ok(())
 }
 
-fn stop(name: String) -> Result<(), CliError> {
+fn send_term_signal(pid: u32) {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .output();
+    }
+}
+
+fn send_kill_signal(pid: u32) {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let _ = Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+}
+
+/// Poll until the postmaster process has exited AND its postmaster.pid file is
+/// gone from the data directory, or `timeout` elapses. Returns true if shutdown
+/// completed within the deadline.
+///
+/// Matches `pg_ctl -w` semantics. Without this, a `stop` → `start` sequence on
+/// a busy instance races with the still-draining postmaster: the next start
+/// sees a live postmaster.pid and fails. See vectorize-io/pg0#17.
+fn wait_for_shutdown(pid: u32, data_dir: &PathBuf, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    let pid_file = data_dir.join("postmaster.pid");
+    loop {
+        if !is_process_running(pid) && !pid_file.exists() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn stop(name: String, timeout_secs: u64) -> Result<(), CliError> {
     let info = load_instance(&name)?.ok_or(CliError::NoInstance)?;
 
     if !is_process_running(info.pid) {
@@ -965,46 +1026,25 @@ fn stop(name: String) -> Result<(), CliError> {
 
     println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
 
-    // Send SIGTERM to gracefully stop
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        let _ = Command::new("kill")
-            .args(["-TERM", &info.pid.to_string()])
-            .output();
-    }
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let _ = Command::new("taskkill")
-            .args(["/PID", &info.pid.to_string()])
-            .output();
+    send_term_signal(info.pid);
+
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    if wait_for_shutdown(info.pid, &info.data_dir, timeout) {
+        println!("PostgreSQL instance '{}' stopped.", name);
+        return Ok(());
     }
 
-    // Wait a bit for graceful shutdown
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
-    // Force kill if still running
-    if is_process_running(info.pid) {
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-            let _ = Command::new("kill")
-                .args(["-9", &info.pid.to_string()])
-                .output();
-        }
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let _ = Command::new("taskkill")
-                .args(["/F", "/PID", &info.pid.to_string()])
-                .output();
-        }
-    }
-
-    println!("PostgreSQL instance '{}' stopped.", name);
-
-    Ok(())
+    // Timed out — force-kill as a safety net, but surface an error so the
+    // caller knows the shutdown wasn't clean.
+    eprintln!(
+        "PostgreSQL did not shut down within {}s, sending SIGKILL...",
+        timeout_secs
+    );
+    send_kill_signal(info.pid);
+    Err(CliError::Other(format!(
+        "PostgreSQL instance '{}' did not shut down within {}s; sent SIGKILL",
+        name, timeout_secs
+    )))
 }
 
 fn drop_instance(name: String, force: bool) -> Result<(), CliError> {
@@ -1033,40 +1073,14 @@ fn drop_instance(name: String, force: bool) -> Result<(), CliError> {
         }
     }
 
-    // Stop if running
+    // Stop if running — wait for the postmaster to fully exit before
+    // deleting the data directory so we don't yank files out from under
+    // an in-progress shutdown.
     if is_process_running(info.pid) {
         println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-            let _ = Command::new("kill")
-                .args(["-TERM", &info.pid.to_string()])
-                .output();
-        }
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let _ = Command::new("taskkill")
-                .args(["/PID", &info.pid.to_string()])
-                .output();
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        if is_process_running(info.pid) {
-            #[cfg(unix)]
-            {
-                use std::process::Command;
-                let _ = Command::new("kill")
-                    .args(["-9", &info.pid.to_string()])
-                    .output();
-            }
-            #[cfg(windows)]
-            {
-                use std::process::Command;
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/PID", &info.pid.to_string()])
-                    .output();
-            }
+        send_term_signal(info.pid);
+        if !wait_for_shutdown(info.pid, &info.data_dir, std::time::Duration::from_secs(60)) {
+            send_kill_signal(info.pid);
         }
     }
 
@@ -1526,7 +1540,7 @@ fn main() {
             let port = port.unwrap_or(5432);
             start(name, port, port_was_specified, version, data_dir, username, password, database, config)
         }
-        Commands::Stop { name } => stop(name),
+        Commands::Stop { name, timeout } => stop(name, timeout),
         Commands::Drop { name, force } => drop_instance(name, force),
         Commands::Info { name, output } => info(name, output),
         Commands::List { output } => list(output),

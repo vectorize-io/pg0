@@ -152,6 +152,40 @@ class TestPg0:
             pg2.stop()
             pg0.drop(f"{TEST_NAME}-2")
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="os.kill(pid, 0) probe semantics differ on Windows; the wait-for-shutdown contract is exercised by the Unix matrix.",
+    )
+    def test_stop_waits_for_postmaster_exit(self, clean_instance):
+        """pg0 stop must not return until the postmaster has fully exited.
+
+        Regression test for https://github.com/vectorize-io/pg0/issues/17
+        Previously, `pg0 stop` sent SIGTERM, slept 2s, and returned — so a
+        stop → start sequence could race a still-draining postmaster, leaving
+        a live postmaster.pid that broke the next start.
+        """
+        pg = Pg0(name=TEST_NAME, port=TEST_PORT)
+        info = pg.start()
+        pid = info.pid
+        assert pid is not None
+
+        # Generate some shutdown work (WAL + checkpoint) to widen the race window
+        pg.execute("CREATE TABLE shutdown_test (id int);")
+        pg.execute("INSERT INTO shutdown_test SELECT generate_series(1, 10000);")
+        pg.execute("CHECKPOINT;")
+
+        pg.stop()
+
+        # After stop returns, the postmaster must be gone — sending signal 0
+        # to a dead pid raises ProcessLookupError.
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+        # And an immediate restart must succeed (no stale postmaster.pid race).
+        info = pg.start()
+        assert info.running is True
+        pg.stop()
+
     def test_restart_with_custom_database(self, clean_instance):
         """Restarting an instance with a non-default database must be idempotent.
 
