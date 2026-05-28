@@ -961,23 +961,6 @@ fn start(
     Ok(())
 }
 
-fn send_term_signal(pid: u32) {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .output();
-    }
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string()])
-            .output();
-    }
-}
-
 fn send_kill_signal(pid: u32) {
     #[cfg(unix)]
     {
@@ -1016,6 +999,40 @@ fn wait_for_shutdown(pid: u32, data_dir: &PathBuf, timeout: std::time::Duration)
     }
 }
 
+fn find_pg_ctl_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
+    let pg_ctl_name = if cfg!(windows) { "pg_ctl.exe" } else { "pg_ctl" };
+
+    // Same layout as find_psql_binary: installation_dir/<version>/bin/pg_ctl
+    if let Ok(entries) = fs::read_dir(installation_dir) {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("bin").join(pg_ctl_name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    let direct = installation_dir.join("bin").join(pg_ctl_name);
+    if direct.exists() {
+        return Ok(direct);
+    }
+
+    Err(CliError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!(
+            "{} not found in {}",
+            pg_ctl_name,
+            installation_dir.display()
+        ),
+    )))
+}
+
+/// Stop the postmaster cleanly. Delegates to `pg_ctl stop -m fast -w` so the
+/// shutdown uses the correct per-platform signal (especially on Windows, where
+/// plain `taskkill` does not trigger graceful PostgreSQL shutdown) and the
+/// command does not return until the postmaster has exited and postmaster.pid
+/// is gone. On timeout, falls back to SIGKILL and returns an error so callers
+/// know the shutdown wasn't clean. See vectorize-io/pg0#17.
 fn stop(name: String, timeout_secs: u64) -> Result<(), CliError> {
     let info = load_instance(&name)?.ok_or(CliError::NoInstance)?;
 
@@ -1026,16 +1043,32 @@ fn stop(name: String, timeout_secs: u64) -> Result<(), CliError> {
 
     println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
 
-    send_term_signal(info.pid);
+    let pg_ctl = find_pg_ctl_binary(&info.installation_dir)?;
+    let pg_ctl_status = std::process::Command::new(&pg_ctl)
+        .arg("stop")
+        .arg("-D")
+        .arg(&info.data_dir)
+        .arg("-m")
+        .arg("fast")
+        .arg("-w")
+        .arg("-t")
+        .arg(timeout_secs.to_string())
+        .status()?;
 
-    let timeout = std::time::Duration::from_secs(timeout_secs);
-    if wait_for_shutdown(info.pid, &info.data_dir, timeout) {
+    // Belt-and-suspenders: even after pg_ctl reports success, give the OS a
+    // brief moment to reap the process and remove postmaster.pid before any
+    // subsequent start runs.
+    if pg_ctl_status.success()
+        && wait_for_shutdown(
+            info.pid,
+            &info.data_dir,
+            std::time::Duration::from_secs(5),
+        )
+    {
         println!("PostgreSQL instance '{}' stopped.", name);
         return Ok(());
     }
 
-    // Timed out — force-kill as a safety net, but surface an error so the
-    // caller knows the shutdown wasn't clean.
     eprintln!(
         "PostgreSQL did not shut down within {}s, sending SIGKILL...",
         timeout_secs
@@ -1078,8 +1111,24 @@ fn drop_instance(name: String, force: bool) -> Result<(), CliError> {
     // an in-progress shutdown.
     if is_process_running(info.pid) {
         println!("Stopping PostgreSQL instance '{}' (pid: {})...", name, info.pid);
-        send_term_signal(info.pid);
-        if !wait_for_shutdown(info.pid, &info.data_dir, std::time::Duration::from_secs(60)) {
+        let stopped = match find_pg_ctl_binary(&info.installation_dir) {
+            Ok(pg_ctl) => std::process::Command::new(&pg_ctl)
+                .arg("stop")
+                .arg("-D")
+                .arg(&info.data_dir)
+                .arg("-m")
+                .arg("fast")
+                .arg("-w")
+                .arg("-t")
+                .arg("60")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false),
+            Err(_) => false,
+        };
+        if !stopped
+            || !wait_for_shutdown(info.pid, &info.data_dir, std::time::Duration::from_secs(5))
+        {
             send_kill_signal(info.pid);
         }
     }
