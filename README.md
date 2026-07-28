@@ -40,7 +40,7 @@ This table describes which **binaries** we publish. Whether a binary actually ru
 - **PostgreSQL 18** with pgvector 0.8.1 bundled
 - **Multiple instances** - run multiple PostgreSQL servers simultaneously
 - **Cross-platform** - macOS (Apple Silicon), Linux (x86_64 & ARM64), Windows (x64)
-- **Language SDKs** - Python and Node.js libraries for programmatic control
+- **Python SDK** - programmatic control from Python
 - **Bundled psql** - no separate client installation needed
 - **Persistent data** - survives restarts, stored in `~/.pg0/`
 
@@ -85,25 +85,6 @@ with Pg0() as pg:
 ```
 
 See [PyPI package](https://pypi.org/project/pg0-embedded/) for more details.
-
-### Node.js SDK
-
-Install via npm:
-
-```bash
-npm install @vectorize-io/pg0
-```
-
-Quick start:
-
-```typescript
-import { Pg0 } from '@vectorize-io/pg0';
-
-const pg = new Pg0();
-await pg.start();
-console.log(await pg.getUri());
-await pg.stop();
-```
 
 ### Linux Distributions
 
@@ -585,7 +566,7 @@ The binary will be at `target/release/pg0`.
 
 ### 0.6.0
 - ARM64 + Alpine Linux support ([`ebcd95d`](https://github.com/vectorize-io/pg0/commit/ebcd95d))
-- `drop` command and Python/Node SDKs ([`24b75fa`](https://github.com/vectorize-io/pg0/commit/24b75fa))
+- `drop` command and Python SDK ([`24b75fa`](https://github.com/vectorize-io/pg0/commit/24b75fa))
 
 ### 0.2.0
 - Multi-instance support ([`b3ac463`](https://github.com/vectorize-io/pg0/commit/b3ac463))

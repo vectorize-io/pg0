@@ -13,7 +13,6 @@ show_usage() {
     echo ""
     echo "Components:"
     echo "  cli     - CLI + Python package (tag: v*)"
-    echo "  node    - Node.js client (tag: node-*)"
     echo ""
     echo "Version:"
     echo "  X.Y.Z   - Explicit version (e.g., 1.0.0)"
@@ -24,8 +23,6 @@ show_usage() {
     echo "Examples:"
     echo "  ./release.sh cli 0.1.0"
     echo "  ./release.sh cli patch"
-    echo "  ./release.sh node 1.0.0"
-    echo "  ./release.sh node patch"
     echo ""
     echo "Note: 'cli' releases both the CLI binaries and Python package together"
 }
@@ -36,10 +33,6 @@ get_cli_version() {
 
 get_py_version() {
     grep '^version = ' sdk/python/pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/'
-}
-
-get_node_version() {
-    grep '"version"' sdk/node/package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/'
 }
 
 bump_version() {
@@ -144,45 +137,6 @@ release_cli() {
     echo "  - Python package to PyPI (pg0-embedded)"
 }
 
-release_node() {
-    local version=$1
-    local current=$(get_node_version)
-
-    echo -e "${BLUE}Node.js Release${NC}"
-    echo "Current version: $current"
-
-    # Handle version bump
-    if [ "$version" = "patch" ] || [ "$version" = "minor" ] || [ "$version" = "major" ]; then
-        version=$(bump_version "$current" "$version")
-    fi
-
-    validate_version "$version"
-    local tag="node-$version"
-
-    check_clean_git
-    check_tag_exists "$tag"
-
-    echo -e "${YELLOW}Preparing Node.js release $tag${NC}"
-
-    # Update version in package.json
-    echo "Updating package.json version to $version..."
-    cd sdk/node
-    npm version "$version" --no-git-tag-version
-    cd ../..
-
-    # Commit and tag
-    git add sdk/node/package.json
-    git commit -m "chore: bump Node.js client version to $version"
-    git tag -a "$tag" -m "Node.js Client Release $version"
-
-    # Push
-    git push
-    git push origin "$tag"
-
-    echo -e "${GREEN}Node.js release $tag pushed!${NC}"
-    echo "Package will be published to npm as: @vectorize-io/pg0"
-}
-
 # Main
 if [ -z "$1" ] || [ -z "$2" ]; then
     show_usage
@@ -195,9 +149,6 @@ VERSION=$2
 case $COMPONENT in
     cli)
         release_cli "$VERSION"
-        ;;
-    node|nodejs)
-        release_node "$VERSION"
         ;;
     *)
         echo -e "${RED}Error: Unknown component '$COMPONENT'${NC}"
