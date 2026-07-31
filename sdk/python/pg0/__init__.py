@@ -143,6 +143,10 @@ def _run_pg0(*args: str, check: bool = True) -> subprocess.CompletedProcess:
                     [pg0_path, *args],
                     stdout=out_f,
                     stderr=err_f,
+                    # Windows: hide the console window. Without this, launching
+                    # pg0 (and the postgres it spawns via cmd /C) pops a visible
+                    # black cmd window on the desktop.
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
                 out_f.seek(0)
                 err_f.seek(0)
