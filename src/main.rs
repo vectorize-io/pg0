@@ -800,21 +800,8 @@ fn start(
 ) -> Result<(), CliError> {
     // Check if already running
     if let Some(info) = load_instance(&name)? {
-        // Trust the data dir's postmaster.pid (verified as a live postgres)
-        // over the saved pid, which can be stale or reused after a reboot.
-        if let Some(pid) = read_postmaster_pid(&info.data_dir)
-            .ok()
-            .filter(|&pid| is_postgres_process(pid))
-        {
-            return Err(CliError::AlreadyRunning(pid));
-        }
+        check_not_running(&info.data_dir)?;
         // Stale instance: clean up instance metadata but preserve data directory.
-        // Remove stale postmaster.pid so PostgreSQL can start with existing data.
-        let pid_file = info.data_dir.join("postmaster.pid");
-        if pid_file.exists() {
-            println!("Removing stale postmaster.pid (server no longer running)...");
-            fs::remove_file(&pid_file)?;
-        }
         remove_instance(&name)?;
     }
 
@@ -1013,12 +1000,42 @@ fn start(
     Ok(())
 }
 
+/// Refuse if a live postgres owns this data dir's postmaster.pid; otherwise
+/// remove a stale postmaster.pid so PostgreSQL can start with existing data.
+/// The pidfile is trusted over instance.json's pid, which can be stale or
+/// reused after a reboot (#37).
+fn check_not_running(data_dir: &Path) -> Result<(), CliError> {
+    let data_dir = data_dir.to_path_buf();
+    if let Some(pid) = read_postmaster_pid(&data_dir)
+        .ok()
+        .filter(|&pid| is_postgres_process(pid))
+    {
+        return Err(CliError::AlreadyRunning(pid));
+    }
+    let pid_file = data_dir.join("postmaster.pid");
+    if pid_file.exists() {
+        println!("Removing stale postmaster.pid (server no longer running)...");
+        fs::remove_file(&pid_file)?;
+    }
+    Ok(())
+}
+
+/// SIGKILL fallback that re-checks the pid first, so a pid the OS has
+/// already handed to another process is never killed (#37).
+fn kill_if_postgres(pid: u32) {
+    if is_postgres_process(pid) {
+        send_kill_signal(pid);
+    }
+}
+
 /// Run initdb exactly as postgresql_embedded does, plus `--locale=C`.
-#[cfg(windows)]
+/// Only called on Windows; kept cross-platform so it is tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn init_data_dir(version_dir: &Path, data_dir: &Path, password: &str) -> Result<(), CliError> {
     let pwfile = std::env::temp_dir().join(format!("pg0-initdb-{}.pw", process::id()));
     fs::write(&pwfile, password)?;
-    let output = process::Command::new(version_dir.join("bin").join("initdb.exe"))
+    let initdb = if cfg!(windows) { "initdb.exe" } else { "initdb" };
+    let output = process::Command::new(version_dir.join("bin").join(initdb))
         .arg("-D")
         .arg(data_dir)
         .args(["-U", "postgres", "--auth=password", "--encoding=UTF8", "--locale=C"])
@@ -1147,9 +1164,7 @@ fn stop(name: String, timeout_secs: u64) -> Result<(), CliError> {
         "PostgreSQL did not shut down within {}s, sending SIGKILL...",
         timeout_secs
     );
-    if is_postgres_process(pid) {
-        send_kill_signal(pid);
-    }
+    kill_if_postgres(pid);
     Err(CliError::Other(format!(
         "PostgreSQL instance '{}' did not shut down within {}s; sent SIGKILL",
         name, timeout_secs
@@ -1205,9 +1220,7 @@ fn drop_instance(name: String, force: bool) -> Result<(), CliError> {
         if !stopped
             || !wait_for_shutdown(pid, &info.data_dir, std::time::Duration::from_secs(5))
         {
-            if is_postgres_process(pid) {
-                send_kill_signal(pid);
-            }
+            kill_if_postgres(pid);
         }
     }
 
@@ -1751,13 +1764,158 @@ mod tests {
         fs::remove_dir_all(test_dir).unwrap();
     }
 
+    const STATE: &str = r#""port":5432,"data_dir":"/d","installation_dir":"/i","username":"u","password":"p","database":"db","version":"18""#;
+
     #[test]
     fn instance_json_without_pid_loads() {
-        let info: InstanceInfo = serde_json::from_str(
-            r#"{"port":5432,"data_dir":"/d","installation_dir":"/i","username":"u","password":"p","database":"db","version":"18"}"#,
-        )
-        .unwrap();
+        let info: InstanceInfo = serde_json::from_str(&format!("{{{}}}", STATE)).unwrap();
         assert_eq!(info.pid, None);
+    }
+
+    #[test]
+    fn instance_json_with_null_pid_loads() {
+        let info: InstanceInfo =
+            serde_json::from_str(&format!(r#"{{"pid":null,{}}}"#, STATE)).unwrap();
+        assert_eq!(info.pid, None);
+    }
+
+    #[test]
+    fn instance_json_round_trips_pid() {
+        let json = serde_json::to_string(&instance(Path::new("/t"), Some(42))).unwrap();
+        let info: InstanceInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info.pid, Some(42));
+    }
+
+    #[test]
+    fn is_postgres_process_checks_liveness_and_name() {
+        let test_dir = unique_dir("pg0-is-postgres");
+        fs::create_dir_all(&test_dir).unwrap();
+        let mut child = spawn_fake_postmaster(&test_dir);
+        let pid = child.id();
+
+        assert!(is_postgres_process(pid));
+        // Alive but not postgres, e.g. a pid reused after reboot.
+        assert!(!is_postgres_process(process::id()));
+        // kill(0) would target our own process group.
+        assert!(!is_postgres_process(0));
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!is_postgres_process(pid));
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn check_not_running_refuses_live_postmaster() {
+        let test_dir = unique_dir("pg0-check-live");
+        fs::create_dir_all(&test_dir).unwrap();
+        let mut child = spawn_fake_postmaster(&test_dir);
+        let data_dir = test_dir.join("data");
+
+        let result = check_not_running(&data_dir);
+        assert!(matches!(result, Err(CliError::AlreadyRunning(p)) if p == child.id()));
+        // Never remove a live server's pidfile.
+        assert!(data_dir.join("postmaster.pid").exists());
+
+        child.kill().unwrap();
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn check_not_running_clears_stale_pidfiles() {
+        let data_dir = unique_dir("pg0-check-stale");
+        fs::create_dir_all(&data_dir).unwrap();
+        let pid_file = data_dir.join("postmaster.pid");
+
+        // #37: pidfile names a pid the OS reused for a non-postgres process.
+        fs::write(&pid_file, format!("{}\n", process::id())).unwrap();
+        check_not_running(&data_dir).unwrap();
+        assert!(!pid_file.exists());
+
+        // Unparseable pidfile.
+        fs::write(&pid_file, "garbage\n").unwrap();
+        check_not_running(&data_dir).unwrap();
+        assert!(!pid_file.exists());
+
+        // No pidfile at all.
+        check_not_running(&data_dir).unwrap();
+        fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn kill_if_postgres_spares_other_processes() {
+        let test_dir = unique_dir("pg0-kill");
+        fs::create_dir_all(&test_dir).unwrap();
+
+        let mut other = process::Command::new("sleep").arg("30").spawn().unwrap();
+        kill_if_postgres(other.id());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(other.try_wait().unwrap().is_none(), "non-postgres process was killed");
+        other.kill().unwrap();
+
+        let mut postgres = spawn_fake_postmaster(&test_dir);
+        kill_if_postgres(postgres.id());
+        assert!(!postgres.wait().unwrap().success());
+
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn wait_for_shutdown_ignores_reused_pid() {
+        let test_dir = unique_dir("pg0-wait");
+        fs::create_dir_all(&test_dir).unwrap();
+        let timeout = std::time::Duration::from_millis(300);
+
+        // Postgres alive with its pidfile: not shut down.
+        let mut postgres = spawn_fake_postmaster(&test_dir);
+        let data_dir = test_dir.join("data");
+        assert!(!wait_for_shutdown(postgres.id(), &data_dir, timeout));
+        postgres.kill().unwrap();
+
+        // Pid now held by a non-postgres process and no pidfile: shut down.
+        fs::remove_file(data_dir.join("postmaster.pid")).unwrap();
+        assert!(wait_for_shutdown(process::id(), &data_dir, timeout));
+
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn init_data_dir_uses_c_locale() {
+        let test_dir = unique_dir("pg0-initdb");
+        let version_dir =
+            extract_bundled_postgresql(&test_dir.join("installation"), env!("PG_VERSION")).unwrap();
+        let data_dir = test_dir.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+
+        init_data_dir(&version_dir, &data_dir, "secret").unwrap();
+
+        let conf = fs::read_to_string(data_dir.join("postgresql.conf")).unwrap();
+        assert!(
+            conf.lines().any(|l| l.starts_with("lc_messages = C")),
+            "cluster not initialized with --locale=C"
+        );
+        let hba = fs::read_to_string(data_dir.join("pg_hba.conf")).unwrap();
+        assert!(hba.lines().any(|l| !l.starts_with('#') && l.trim_end().ends_with("password")));
+        // The temporary password file must not be left behind.
+        assert!(!std::env::temp_dir()
+            .join(format!("pg0-initdb-{}.pw", process::id()))
+            .exists());
+        // setup() skips its own initdb when this file exists.
+        assert!(data_dir.join("postgresql.conf").exists());
+
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn health_check_fails_without_live_postmaster() {
+        let test_dir = unique_dir("pg0-health-stale");
+        fs::create_dir_all(test_dir.join("data")).unwrap();
+        // Reused pid: alive, matches the pidfile, but not postgres.
+        let me = process::id();
+        fs::write(test_dir.join("data").join("postmaster.pid"), format!("{}\n", me)).unwrap();
+        assert!(!is_database_healthy(&instance(&test_dir, Some(me))));
+        assert!(!is_database_healthy(&instance(&test_dir, None)));
+        fs::remove_dir_all(test_dir).unwrap();
     }
 
     #[test]

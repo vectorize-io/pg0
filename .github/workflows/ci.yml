@@ -19,6 +19,9 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      - name: Unit tests
+        run: cargo test --release
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
