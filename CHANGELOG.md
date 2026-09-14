@@ -2,6 +2,14 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `start`, `stop`, and `drop` no longer trust a saved pid that the OS reused after a reboot; a pid only counts as running if it matches `postmaster.pid` and is a live postgres process. This fixes a permanent "Instance already running" refusal and prevents `stop` from signalling an unrelated process (#37).
+- `instance.json` without a `pid` (or with `null` / `0`) no longer breaks `start` (#36).
+- New Windows clusters are initialized with `--locale=C`, so `initdb` no longer fails on localized locale names such as `Turkish_Türkiye.1252` (#35). Existing data directories are unchanged.
+
 ## [0.15.1] - 2026-07-31
 
 ### Fixed
