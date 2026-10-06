@@ -492,6 +492,10 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
     // Check if already extracted
     let bin_dir = version_dir.join("bin");
     let already_extracted = bin_dir.exists() && bin_dir.join(POSTGRES_BINARY).exists();
+    // Earlier macOS builds shipped a bundle that loads OpenSSL from Homebrew;
+    // re-extract over it so the bundled OpenSSL replaces those binaries.
+    #[cfg(target_os = "macos")]
+    let already_extracted = already_extracted && version_dir.join("lib/libcrypto.3.dylib").exists();
 
     if !already_extracted {
         if POSTGRESQL_BUNDLE.is_empty() {
