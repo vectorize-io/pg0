@@ -406,6 +406,42 @@ pg0 start -c shared_buffers=512MB -c work_mem=128MB
 pg0 start -c shared_buffers=1GB -c maintenance_work_mem=2GB
 ```
 
+### Runtime directories
+
+The following environment variables allow deployments to keep executables in
+an approved location and writable instance data in a separate directory:
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `PG0_HOME` | Instance metadata and default data directories | `~/.pg0` |
+| `PG0_INSTALLATION_DIR` | Root for extracted PostgreSQL and extension files; contains a version subdirectory such as `18.1.0` | `$PG0_HOME/installation` |
+| `PG0_EXECUTABLE` | Python SDK only: full path to the pg0 executable, taking precedence over the wheel's bundled binary | Automatic binary discovery |
+
+All overrides must be non-empty absolute paths. An invalid override fails with
+an error instead of falling back to the user profile. `--data-dir` continues to
+override the data directory for an individual instance. Keep `PG0_HOME` set to
+the same value for subsequent `info`, `stop`, `drop`, and other commands.
+
+For example, in PowerShell:
+
+```powershell
+$env:PG0_HOME = Join-Path $env:LOCALAPPDATA 'pg0-state'
+$env:PG0_INSTALLATION_DIR = 'C:\ProgramData\pg0\installation'
+$env:PG0_EXECUTABLE = 'C:\Program Files\pg0\pg0.exe'
+& $env:PG0_EXECUTABLE start --name example
+```
+
+Provision the executable at `PG0_EXECUTABLE` separately. The first start needs
+write access to `PG0_INSTALLATION_DIR` to extract PostgreSQL and pgvector.
+On Windows, a complete installation can subsequently be used with read and
+execute access while `PG0_HOME` remains writable. Installing or upgrading
+extensions still requires write access to the installation. These settings
+select locations; the applicable execution policy must allow those locations.
+No symbolic links are needed on Windows.
+
+`PG0_EXECUTABLE` is a runtime setting. The existing `PG0_BINARY_PATH` setting is
+used only when building a Python wheel.
+
 ## How It Works
 
 PostgreSQL and pgvector are **bundled directly** into the pg0 binary - no downloads required, works completely offline! On first start, pg0 extracts PostgreSQL and pgvector to `~/.pg0/installation/` and initializes the database.

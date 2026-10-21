@@ -101,6 +101,19 @@ def _get_install_dir() -> Path:
 
 def _find_pg0() -> str:
     """Find the pg0 binary or raise an error if not found."""
+    # An explicit executable takes precedence over the wheel's bundled binary.
+    # Do not silently fall back to a location blocked by an execution policy.
+    configured = os.environ.get("PG0_EXECUTABLE")
+    if configured is not None:
+        binary = Path(configured)
+        if not binary.is_absolute() or not binary.is_file():
+            raise Pg0NotFoundError(
+                "PG0_EXECUTABLE must be an absolute path to an existing pg0 executable"
+            )
+        if sys.platform != "win32" and not os.access(binary, os.X_OK):
+            raise Pg0NotFoundError("PG0_EXECUTABLE is not executable")
+        return str(binary)
+
     # Check for bundled binary first (from platform-specific wheel)
     bundled = _get_bundled_binary()
     if bundled:
