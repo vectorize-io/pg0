@@ -215,9 +215,43 @@ struct InfoOutput {
 }
 
 fn get_base_dir() -> Result<PathBuf, CliError> {
+    if let Some(path) = configured_directory("PG0_HOME", std::env::var_os("PG0_HOME"))? {
+        return Ok(path);
+    }
     dirs::home_dir()
         .map(|h| h.join(".pg0"))
         .ok_or(CliError::NoDataDir)
+}
+
+/// Explicit paths must be absolute so a later command can find the same files
+/// even when invoked from a different working directory. Preserve OS strings.
+fn configured_directory(
+    variable: &str,
+    value: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>, CliError> {
+    match value {
+        None => Ok(None),
+        Some(value) => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(CliError::Other(format!(
+                    "{} must be a non-empty absolute directory path",
+                    variable
+                )));
+            }
+            Ok(Some(path))
+        }
+    }
+}
+
+fn get_installation_dir() -> Result<PathBuf, CliError> {
+    match configured_directory(
+        "PG0_INSTALLATION_DIR",
+        std::env::var_os("PG0_INSTALLATION_DIR"),
+    )? {
+        Some(path) => Ok(path),
+        None => Ok(get_base_dir()?.join("installation")),
+    }
 }
 
 fn get_instances_dir() -> Result<PathBuf, CliError> {
@@ -814,7 +848,6 @@ fn start(
         port
     };
 
-    let base_dir = get_base_dir()?;
     let instance_dir = get_instance_dir(&name)?;
 
     // Use provided data_dir or default to instance-specific directory
@@ -823,7 +856,7 @@ fn start(
         None => instance_dir.join("data"),
     };
 
-    let installation_dir = base_dir.join("installation");
+    let installation_dir = get_installation_dir()?;
 
     fs::create_dir_all(&data_dir)?;
     fs::create_dir_all(&installation_dir)?;
@@ -1693,6 +1726,35 @@ fn init_logging(verbose: bool) {
         .with_env_filter(filter)
         .with_target(true)
         .init();
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    #[test]
+    fn unset_directory_keeps_the_default() {
+        assert!(configured_directory("PG0_HOME", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn explicit_directory_preserves_spaces() {
+        let path = std::env::temp_dir().join("pg0 installation with spaces");
+        assert_eq!(
+            configured_directory("PG0_INSTALLATION_DIR", Some(path.clone().into_os_string()))
+                .unwrap(),
+            Some(path)
+        );
+    }
+
+    #[test]
+    fn invalid_directory_does_not_fall_back() {
+        for value in ["", "relative/path"] {
+            let error = configured_directory("PG0_HOME", Some(value.into())).unwrap_err();
+            assert!(error.to_string().contains("PG0_HOME"));
+            assert!(error.to_string().contains("absolute"));
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
