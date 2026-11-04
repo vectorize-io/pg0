@@ -2,6 +2,13 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [0.16.1] - 2026-11-04
+
+### Fixed
+
+- macOS: PostgreSQL now starts on Macs without Homebrew. OpenSSL is bundled instead of being loaded from `/opt/homebrew`, and installs left broken by earlier versions are repaired on the next `pg0 start` (#42, #51).
+- Windows: `pg0 start` no longer fails with "stream did not contain valid UTF-8" on Chinese and other non-UTF-8 locales, and `pg0 logs` no longer fails on such logs (#46).
+
 ## [0.16.0] - 2026-11-04
 
 ### Added
