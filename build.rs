@@ -165,7 +165,7 @@ fn bundle_pgvector(pg_version: &str, pgvector_tag: &str, pgvector_repo: &str, ou
 fn download_file(url: &str, dest: &PathBuf) -> io::Result<()> {
     // Use curl for downloading (available on all CI platforms)
     let status = std::process::Command::new("curl")
-        .args(["-fsSL", url, "-o"])
+        .args(["-fsSL", "--retry", "3", url, "-o"])
         .arg(dest)
         .status()?;
 
@@ -260,7 +260,14 @@ fn bundle_runtime_libs(versions: &HashMap<String, String>, out_dir: &PathBuf) {
         ));
         if !deb_path.exists() {
             eprintln!("Downloading {}...", spec.url);
-            download_file(&spec.url, &deb_path).expect("Failed to download .deb");
+            // The archive pool drops superseded builds and Launchpad has
+            // outages, so try the pinned URL first and Launchpad second. The
+            // sha256 check below makes both sources equivalent.
+            let file = spec.url.rsplit('/').next().unwrap();
+            let fallback = format!("https://launchpad.net/ubuntu/+archive/primary/+files/{}", file);
+            download_file(&spec.url, &deb_path)
+                .or_else(|_| download_file(&fallback, &deb_path))
+                .expect("Failed to download .deb");
         }
         verify_sha256(&deb_path, &spec.sha256);
         for filename in &spec.wanted {
