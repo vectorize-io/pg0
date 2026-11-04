@@ -46,6 +46,24 @@ class TestPg0:
 
         assert call.call_args.kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="uses a POSIX shell script")
+    def test_runner_does_not_wait_for_children_holding_stdio(self, tmp_path):
+        """pg0 exits while a child it spawned keeps stdout/stderr open, like the
+        daemonized PostgreSQL does. The wrapper must return when pg0 exits.
+
+        Regression test for https://github.com/vectorize-io/pg0/issues/45.
+        """
+        fake = tmp_path / "pg0"
+        fake.write_text("#!/bin/sh\necho started\nsleep 30 &\nexit 0\n")
+        fake.chmod(0o755)
+
+        begin = time.monotonic()
+        with patch.object(pg0, "_find_pg0", return_value=str(fake)):
+            result = pg0._run_pg0("start")
+
+        assert time.monotonic() - begin < 10
+        assert result.stdout.strip() == "started"
+
     def test_start_stop(self, clean_instance):
         """Test starting and stopping Pg0."""
         pg = Pg0(name=TEST_NAME, port=TEST_PORT)
