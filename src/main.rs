@@ -375,7 +375,9 @@ fn running_pid(info: &InstanceInfo) -> Option<u32> {
 /// Read the PID from PostgreSQL's postmaster.pid file
 fn read_postmaster_pid(data_dir: &PathBuf) -> Result<u32, CliError> {
     let pid_file = data_dir.join("postmaster.pid");
-    let content = fs::read_to_string(&pid_file)?;
+    // Read loosely: postmaster.pid also holds the data directory path, which
+    // PostgreSQL on Windows writes in the ANSI code page (e.g. GBK), not UTF-8 (#46).
+    let content = String::from_utf8_lossy(&fs::read(&pid_file)?).into_owned();
     // First line of postmaster.pid is the PID
     content
         .lines()
@@ -431,7 +433,8 @@ fn read_latest_pg_log(data_dir: &PathBuf) -> Option<String> {
     });
 
     let log_file = log_files.first()?;
-    let content = fs::read_to_string(log_file.path()).ok()?;
+    // The server log may be in the OS code page, not UTF-8 (#46).
+    let content = String::from_utf8_lossy(&fs::read(log_file.path()).ok()?).into_owned();
 
     // Get last 20 lines
     let lines: Vec<&str> = content.lines().collect();
@@ -1477,6 +1480,12 @@ fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
     Ok(())
 }
 
+/// One log line as text. The server log may be in the OS code page rather
+/// than UTF-8 (e.g. GBK on Chinese Windows, #46), so never fail on it.
+fn lossy_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim_end_matches('\r').to_string()
+}
+
 fn logs(name: String, lines: Option<usize>, follow: bool) -> Result<(), CliError> {
     let instance_dir = get_instance_dir(&name)?;
     let log_dir = instance_dir.join("data").join("log");
@@ -1521,16 +1530,16 @@ fn logs(name: String, lines: Option<usize>, follow: bool) -> Result<(), CliError
         use std::io::{BufRead, BufReader, Seek, SeekFrom};
         file.seek(SeekFrom::Start(0))?;
         let reader = BufReader::new(&file);
-        for line in reader.lines() {
-            println!("{}", line?);
+        for line in reader.split(b'\n') {
+            println!("{}", lossy_line(&line?));
         }
 
         // Now follow new content
         loop {
             file.seek(SeekFrom::Start(pos))?;
             let reader = BufReader::new(&file);
-            for line in reader.lines() {
-                println!("{}", line?);
+            for line in reader.split(b'\n') {
+                println!("{}", lossy_line(&line?));
             }
             pos = file.metadata()?.len();
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1540,7 +1549,10 @@ fn logs(name: String, lines: Option<usize>, follow: bool) -> Result<(), CliError
         use std::io::{BufRead, BufReader};
         let file = fs::File::open(log_file)?;
         let reader = BufReader::new(file);
-        let all_lines: Vec<_> = reader.lines().collect::<Result<_, _>>()?;
+        let all_lines: Vec<String> = reader
+            .split(b'\n')
+            .map(|line| line.map(|l| lossy_line(&l)))
+            .collect::<Result<_, _>>()?;
 
         let lines_to_show = if let Some(n) = lines {
             &all_lines[all_lines.len().saturating_sub(n)..]
@@ -1751,6 +1763,28 @@ fn init_logging(verbose: bool) {
 #[cfg(test)]
 mod directory_tests {
     use super::*;
+
+    #[test]
+    fn postmaster_pid_with_non_utf8_path_is_readable() {
+        // Regression for #46: PostgreSQL on Chinese Windows writes the data
+        // directory (line 2) in GBK. "用户" in GBK is not valid UTF-8.
+        let dir = std::env::temp_dir().join(format!("pg0-gbk-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut content = b"4242\nC:\\Users\\".to_vec();
+        content.extend_from_slice(&[0xd3, 0xc3, 0xbb, 0xa7]);
+        content.extend_from_slice(b"\\.pg0\\data\n1700000000\n5432\n");
+        fs::write(dir.join("postmaster.pid"), content).unwrap();
+
+        let pid = read_postmaster_pid(&dir);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(pid.unwrap(), 4242);
+    }
+
+    #[test]
+    fn lossy_line_handles_non_utf8_and_crlf() {
+        assert_eq!(lossy_line(b"LOG:  ready\r"), "LOG:  ready");
+        assert!(lossy_line(&[0xd3, 0xc3, b'!']).ends_with('!'));
+    }
 
     #[test]
     fn unset_directory_keeps_the_default() {
