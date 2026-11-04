@@ -1407,7 +1407,7 @@ fn is_database_healthy(info: &InstanceInfo) -> bool {
         return false;
     }
 
-    process::Command::new(psql_path)
+    let output = process::Command::new(psql_path)
         // Avoid user psql configuration and fail instead of prompting if the
         // saved instance credentials no longer work.
         .args(["-X", "-w", "-q", "-v", "ON_ERROR_STOP=1"])
@@ -1415,13 +1415,29 @@ fn is_database_healthy(info: &InstanceInfo) -> bool {
         .args(["-U", &info.username, "-d", &info.database])
         .args(["-c", "SELECT 1"])
         // Keep health checks bounded when a broken backend accepts a TCP
-        // connection but never completes startup or the query.
-        .env("PGCONNECT_TIMEOUT", "1")
-        .env("PGOPTIONS", "-c statement_timeout=1000")
+        // connection but never completes startup or the query. Generous
+        // enough for Windows, where each connection starts a new backend
+        // process and antivirus scanning can take seconds (#41).
+        .env("PGCONNECT_TIMEOUT", "10")
+        .env("PGOPTIONS", "-c statement_timeout=5000")
         .env("PGPASSWORD", &info.password)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            // stderr only: stdout may be JSON that callers parse.
+            eprintln!(
+                "Warning: PostgreSQL on port {} is running but did not answer a test query: {}",
+                info.port,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("Warning: could not run psql to check PostgreSQL on port {}: {}", info.port, e);
+            false
+        }
+    }
 }
 
 fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
