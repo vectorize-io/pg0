@@ -2,6 +2,22 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [0.16.0] - 2026-11-04
+
+### Added
+
+- Optional `PG0_EXECUTABLE` (Python SDK), `PG0_INSTALLATION_DIR`, and `PG0_HOME` environment variables to choose where the pg0 executable, the extracted PostgreSQL files, and instance state live, e.g. for Windows machines with application-control policies (#43).
+
+### Fixed
+
+- `Pg0.start()` in the Python SDK no longer hangs forever on Linux and macOS when PostgreSQL keeps pg0's output handles open (#45).
+- `pg0 info` and `pg0 list` no longer report a live instance as stopped on slow Windows machines: the health check now waits up to 10s to connect, and prints psql's error to stderr when it fails (#41).
+- Linux glibc builds: libxml2 is now pinned to `2.9.13+dfsg-1ubuntu0.14`, after Ubuntu removed the previous build from its archive. Bundled Ubuntu packages now fall back to Launchpad when the archive no longer has them.
+
+### Security
+
+- Updated `Cargo.lock` dependencies to clear 24 advisories (quinn-proto, rustls, rustls-webpki, tokio, tar, and others) (#44).
+
 ## [0.15.2] - 2026-09-14
 
 ### Fixed
