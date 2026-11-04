@@ -144,38 +144,26 @@ def _run_pg0(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     """Run a pg0 command."""
     pg0_path = _find_pg0()
     try:
-        if sys.platform == "win32":
-            # On Windows, `pg0 start` spawns PostgreSQL which inherits pg0's
-            # stdio handles. pg0 exits but PostgreSQL keeps writing to those
-            # handles, so Python's capture_output=True pipes never see EOF
-            # and subprocess.run hangs forever. Route stdio through real
-            # files instead — subprocess.run only waits on the process exit
-            # code, not on file handles held by grandchildren.
-            with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
-                rc = subprocess.call(
-                    [pg0_path, *args],
-                    stdout=out_f,
-                    stderr=err_f,
-                    # pg0 is a console executable. Suppress the transient console
-                    # window when it is launched from a GUI Python application.
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                out_f.seek(0)
-                err_f.seek(0)
-                stdout = out_f.read().decode("utf-8", errors="replace")
-                stderr = err_f.read().decode("utf-8", errors="replace")
-            result = subprocess.CompletedProcess(
-                args=[pg0_path, *args],
-                returncode=rc,
-                stdout=stdout,
-                stderr=stderr,
-            )
-        else:
-            result = subprocess.run(
-                [pg0_path, *args],
-                capture_output=True,
-                text=True,
-            )
+        # `pg0 start` spawns PostgreSQL, which inherits pg0's stdio. pg0 exits
+        # but PostgreSQL keeps those handles open, so capture_output=True pipes
+        # never see EOF and subprocess.run hangs forever (seen on Windows and
+        # Linux). Route stdio through real files instead: subprocess.call only
+        # waits for pg0 to exit, not for handles held by grandchildren.
+        # pg0 is a console executable; on Windows, suppress the transient
+        # console window when launched from a GUI Python application.
+        extra = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+            rc = subprocess.call([pg0_path, *args], stdout=out_f, stderr=err_f, **extra)
+            out_f.seek(0)
+            err_f.seek(0)
+            stdout = out_f.read().decode("utf-8", errors="replace")
+            stderr = err_f.read().decode("utf-8", errors="replace")
+        result = subprocess.CompletedProcess(
+            args=[pg0_path, *args],
+            returncode=rc,
+            stdout=stdout,
+            stderr=stderr,
+        )
         if check and result.returncode != 0:
             stderr = result.stderr.strip()
             if "already running" in stderr.lower():
