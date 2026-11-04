@@ -79,6 +79,20 @@ print(info.username)  # postgres
 print(info.database)  # postgres
 ```
 
+## Runtime paths
+
+Set `PG0_EXECUTABLE` to the absolute path of an existing pg0 executable to use
+it instead of the binary bundled in the wheel. An invalid override raises
+`Pg0NotFoundError`; it never silently falls back to the bundled binary.
+
+The CLI also accepts `PG0_HOME` for writable instance state and
+`PG0_INSTALLATION_DIR` for extracted PostgreSQL and pgvector files. Both must
+be absolute paths and are inherited by SDK subprocesses. The installation root
+contains a version subdirectory, for example `18.1.0/bin/postgres.exe`.
+`--data-dir` / `Pg0(data_dir=...)` continues to override an instance's data path.
+See [runtime directories](https://github.com/vectorize-io/pg0#runtime-directories)
+for provisioning and permission requirements.
+
 ## Supported Platforms
 
 Pre-built wheels are available for:
