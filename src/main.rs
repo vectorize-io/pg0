@@ -11,6 +11,8 @@ use tar::Archive;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 
+mod ui;
+
 /// The embedded PostgreSQL bundle
 static POSTGRESQL_BUNDLE: &[u8] = include_bytes!(env!("POSTGRESQL_BUNDLE_PATH"));
 
@@ -172,6 +174,16 @@ enum Commands {
     },
     /// List available extensions
     ListExtensions,
+    /// Open a read-only web UI for all instances in your browser
+    Ui {
+        /// Address to listen on (0.0.0.0 = reachable from your network, 127.0.0.1 = this machine only)
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port to serve the UI on
+        #[arg(short, long, default_value_t = 5050)]
+        port: u16,
+    },
 }
 
 #[derive(Clone, Debug, Default, clap::ValueEnum)]
@@ -318,22 +330,27 @@ fn list_instances() -> Result<Vec<String>, CliError> {
 /// enough: after a reboot the OS may hand a saved pid to an unrelated process,
 /// which we must neither wait on nor signal (#37).
 fn is_postgres_process(pid: u32) -> bool {
+    is_process_named(pid, "postgres")
+}
+
+/// Whether `pid` is a live process whose executable name starts with `prefix`.
+fn is_process_named(pid: u32, prefix: &str) -> bool {
     if pid == 0 {
         // kill(0, ...) targets our own process group and always "succeeds".
         return false;
     }
-    let is_postgres_path = |path: &str| {
+    let name_matches = |path: &str| {
         Path::new(path.trim())
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("postgres"))
+            .is_some_and(|n| n.starts_with(prefix))
     };
     #[cfg(unix)]
     {
         process::Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "comm="])
             .output()
-            .map(|o| o.status.success() && is_postgres_path(&String::from_utf8_lossy(&o.stdout)))
+            .map(|o| o.status.success() && name_matches(&String::from_utf8_lossy(&o.stdout)))
             .unwrap_or(false)
     }
     #[cfg(windows)]
@@ -358,7 +375,7 @@ fn is_postgres_process(pid: u32) -> bool {
             let running = GetExitCodeProcess(handle, &mut exit_code) != 0
                 && exit_code == STILL_ACTIVE as u32
                 && QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len) != 0
-                && is_postgres_path(&String::from_utf16_lossy(&buf[..len as usize]));
+                && name_matches(&String::from_utf16_lossy(&buf[..len as usize]));
             let _ = CloseHandle(handle);
             running
         }
@@ -2084,6 +2101,7 @@ fn main() {
         Commands::Logs { name, lines, follow } => logs(name, lines, follow),
         Commands::InstallExtension { name, extension } => install_extension(name, extension),
         Commands::ListExtensions => list_extensions(),
+        Commands::Ui { host, port } => ui::run(host, port),
     };
 
     if let Err(e) = result {

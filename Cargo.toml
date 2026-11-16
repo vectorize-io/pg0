@@ -22,6 +22,16 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 flate2 = "1"
 tar = "0.4"
+# `pg0 ui`. All of these are already compiled in through postgresql_embedded /
+# reqwest; listing them here only turns on the server side of hyper.
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "time", "sync"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+getrandom = "0.2"
 
 # ZIP extraction for the Windows PostgreSQL bundle, which theseus-rs ships as
 # .zip (unlike every other platform's tar.gz). Only pulled in on Windows

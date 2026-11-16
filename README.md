@@ -227,6 +227,7 @@ pg0 provides the following commands:
 5. **list** - List all PostgreSQL instances
 6. **psql** - Open an interactive psql shell connected to an instance
 7. **logs** - View PostgreSQL logs for debugging
+8. **ui** - Browse all instances in a read-only web UI
 
 ### Start PostgreSQL
 
@@ -313,6 +314,32 @@ pg0 logs --name myapp
 ```
 
 Logs are stored in `~/.pg0/instances/<name>/data/log/`.
+
+### Web UI (read-only)
+
+```bash
+pg0 ui                    # http://<this machine>:5050, opens your browser
+pg0 ui --port 8080
+pg0 ui --host 127.0.0.1   # this machine only
+```
+
+Browse every pg0 instance, database and table, look at table structure, and
+run SQL, all from the browser. Each database also gets an overview: size on
+disk, cache hit rate, vacuum and analyze state, unused indexes, a schema
+diagram, running queries and key settings. Press Ctrl+C to stop it.
+
+![pg0 ui database overview](docs/pg0-ui.jpg)
+
+It cannot change data. Each query runs as a temporary database user that has
+read access only, inside a read-only transaction that is always rolled back,
+and only one statement is allowed per query. The temporary user is removed
+when the UI stops. By default the UI listens on all network interfaces
+(`0.0.0.0`) on port 5050 and needs the secret link printed in the terminal.
+Anyone with that link can read all your data, including system tables, so
+don't share it; it is plain HTTP, so use `--host 127.0.0.1` on networks you
+don't trust. Open it by IP address or `localhost` (host names are refused, to
+block DNS rebinding). Custom SQL is turned off in
+databases with the `dblink` extension.
 
 ### Using pgvector
 
