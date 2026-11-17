@@ -23,7 +23,7 @@ jobs:
       matrix:
         include:
           # macOS Apple Silicon
-          - os: macos-14
+          - os: macos-15
             platform: darwin-aarch64
             wheel_platform: macosx_14_0_arm64
             rust_target: aarch64-apple-darwin
