@@ -2,6 +2,12 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [0.17.0] - 2026-11-17
+
+### Added
+
+- `pg0 ui`: a read-only web UI for all your pg0 instances, served by pg0 itself. Browse tables, run read-only SQL, and see a per-database overview (structure diagram, sizes, vacuum and index stats, live activity). It listens on `0.0.0.0:5050` by default (`--host`, `--port` to change) and is protected by a per-run token. All access goes through a temporary read-only role inside read-only transactions.
+
 ## [0.16.1] - 2026-11-04
 
 ### Fixed
