@@ -40,7 +40,6 @@ def started(pg0_home):
     return instance
 
 
-@skip_ui_on_windows
 def test_ui_lists_instances_databases_tables_and_rows(started):
     """Given an instance started with PGPASSFILE, when pg0 ui runs with the same PGPASSFILE,
     expected the instance, its databases, its tables, and the rows of a table are listed through

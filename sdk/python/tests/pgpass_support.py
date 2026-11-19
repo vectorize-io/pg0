@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import subprocess
@@ -582,9 +583,9 @@ def apply_file_state(instance, state):
 class UiServer:
     """A running ``pg0 ui``. The tests talk to its JSON endpoint (``POST /api``) over HTTP.
 
-    The page opens a browser through ``open`` or ``xdg-open``, so a no-op of each
-    name comes first on PATH. The server binds 127.0.0.1 on a port that the
-    system picks.
+    The page opens a browser through ``open``, ``xdg-open``, or ``rundll32``, so a
+    stand-in of each name is found first. The server binds 127.0.0.1 on a port
+    that the system picks.
     """
 
     LINK = re.compile(r":(\d+)/#token=(\S+)")
@@ -592,18 +593,29 @@ class UiServer:
     def __init__(self, home, pgpassfile=None):
         fake_bin = home.root / "bin"
         fake_bin.mkdir(exist_ok=True)
-        for name in ("open", "xdg-open"):
-            script = fake_bin / name
-            script.write_text("#!/bin/sh\nexit 0\n")
-            script.chmod(0o755)
+        executable = pg0._find_pg0()
+        extra = {}
+        if sys.platform == "win32":
+            # Windows resolves rundll32 from the folder of the running executable before System32,
+            # so pg0 runs from a copy beside a stand-in rundll32 that only prints an error and exits.
+            executable = str(shutil.copy2(executable, fake_bin / "pg0.exe"))
+            system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+            shutil.copy2(system32 / "whoami.exe", fake_bin / "rundll32.exe")
+            # Its own process group lets stop() send Ctrl-Break to pg0 ui alone.
+            extra = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        else:
+            for name in ("open", "xdg-open"):
+                script = fake_bin / name
+                script.write_text("#!/bin/sh\nexit 0\n")
+                script.chmod(0o755)
         env = home.env(pgpassfile)
         env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
         self._home = home
         self._out = open(home.capture / "ui.stdout", "w+b")
         self._err = open(home.capture / "ui.stderr", "w+b")
         self._process = subprocess.Popen(
-            [pg0._find_pg0(), "ui", "--host", "127.0.0.1", "--port", "0"],
-            stdin=subprocess.DEVNULL, stdout=self._out, stderr=self._err, env=env, cwd=home.cwd,
+            [executable, "ui", "--host", "127.0.0.1", "--port", "0"],
+            stdin=subprocess.DEVNULL, stdout=self._out, stderr=self._err, env=env, cwd=home.cwd, **extra,
         )
         home.ui_servers.append(self)
         self.port, self.token = self._wait_for_link()
@@ -651,13 +663,14 @@ class UiServer:
         return self._text(self._err)
 
     def stop(self):
-        """Send SIGINT, wait for the shutdown, and return what pg0 ui printed."""
-        self._process.send_signal(signal.SIGINT)
+        """Send Ctrl-C (Ctrl-Break on Windows), wait for the shutdown, and return what pg0 ui printed."""
+        sent = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
+        self._process.send_signal(sent)
         try:
             self._process.wait(timeout=UI_TIMEOUT)
         except subprocess.TimeoutExpired:
             self.kill()
-            pytest.fail(f"pg0 ui did not stop within {UI_TIMEOUT} seconds of SIGINT")
+            pytest.fail(f"pg0 ui did not stop within {UI_TIMEOUT} seconds of {sent!r}")
         return self.stdout_text(), self.stderr_text()
 
     def kill(self):

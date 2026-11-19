@@ -115,7 +115,7 @@ async fn serve(host: String, port: u16) -> Result<(), CliError> {
     println!("Anyone with this link can read all your data. Press Ctrl+C to stop.");
     open_browser(&url);
 
-    let shutdown = tokio::signal::ctrl_c();
+    let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -202,6 +202,29 @@ fn open_browser(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Completes on Ctrl-C, and on Windows also on Ctrl-Break, which another process can send to
+/// pg0 ui alone when it runs in its own process group.
+async fn shutdown_signal() {
+    #[cfg(windows)]
+    {
+        match tokio::signal::windows::ctrl_break() {
+            Ok(mut ctrl_break) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = ctrl_break.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn random_hex(bytes: usize) -> String {
