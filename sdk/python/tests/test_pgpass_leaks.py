@@ -51,15 +51,12 @@ def test_leak_scan_finds_every_form_in_every_channel(tmp_path):
     )
     try:
         args = process_args(process.pid, env=env, scratch=tmp_path / "capture")
-        if sys.platform != "win32":
-            # TODO(windows): the environment of a process is not read on Windows (see the PR description).
-            environment = process_environment(process.pid, env=env, scratch=tmp_path / "capture")
+        environment = process_environment(process.pid, env=env, scratch=tmp_path / "capture")
     finally:
         process.kill()
         process.wait()
     assert sorted(find_forms(args, pw)) == sorted(forms), "the argument scan reads every form"
-    if sys.platform != "win32":
-        assert sorted(find_forms(environment, pw)) == sorted(forms), "the environment scan reads every form"
+    assert sorted(find_forms(environment, pw)) == sorted(forms), "the environment scan reads every form"
 
 
 def test_no_password_in_output_of_any_command(started):
@@ -110,13 +107,10 @@ def test_no_password_in_process_args_or_environment(started):
         if pid == pids[0]:
             assert data_dir in args, f"the postmaster arguments name its data folder: {args}"
         assert_absent(f"args of {pid}", args, started.pw)
-        # TODO(windows): Windows has no standard command that prints the environment of another
-        # process, so this part runs on macOS and Linux only (see the PR description).
-        if sys.platform != "win32":
-            environment = home.process_environment(pid)
-            if pid == pids[0]:
-                assert "PG0_HOME" in environment, "the scan read the environment of the postmaster"
-            assert_absent(f"env of {pid}", environment, started.pw)
+        environment = home.process_environment(pid)
+        if pid == pids[0]:
+            assert "PG0_HOME" in environment, "the scan read the environment of the postmaster"
+        assert_absent(f"env of {pid}", environment, started.pw)
 
 
 def test_failed_start_leaks_no_password(pg0_home):

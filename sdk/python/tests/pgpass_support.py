@@ -197,13 +197,72 @@ def process_args(pid, *, env, scratch):
     ).stdout
 
 
-def process_environment(pid, *, env, scratch):
-    """The environment of a live process, as text. Unix only.
+def _windows_process_environment(pid):
+    """The environment block of a live 64-bit process, read through the Windows API.
 
-    TODO(windows): Windows has no standard command that prints the environment of another
-    process, so the callers skip this part on Windows. See the PR description for the options.
+    Windows has no command that prints another process's environment, so this reads it from the
+    process's PEB, as psutil does: PEB.ProcessParameters, then its Environment and EnvironmentSize.
     """
-    assert sys.platform != "win32", "the environment of a process is not read on Windows"
+    import ctypes
+    from ctypes import wintypes
+
+    assert ctypes.sizeof(ctypes.c_void_p) == 8, "the PEB offsets below are for 64-bit processes"
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.ReadProcessMemory.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+    ]
+    kernel32.ReadProcessMemory.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    ntdll.NtQueryInformationProcess.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG, ctypes.POINTER(wintypes.ULONG),
+    ]
+    ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+
+    class ProcessBasicInformation(ctypes.Structure):
+        _fields_ = [
+            ("ExitStatus", ctypes.c_long),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("AffinityMask", ctypes.c_void_p),
+            ("BasePriority", ctypes.c_long),
+            ("UniqueProcessId", ctypes.c_void_p),
+            ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+        ]
+
+    process_query_information, process_vm_read = 0x0400, 0x0010
+    handle = kernel32.OpenProcess(process_query_information | process_vm_read, False, int(pid))
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: the process has exited, as /proc/<pid> is gone on Linux.
+            return ""
+        raise OSError(error, f"OpenProcess failed for pid {pid}")
+
+    def read(address, size):
+        buffer = ctypes.create_string_buffer(size)
+        done = ctypes.c_size_t()
+        if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(address), buffer, size, ctypes.byref(done)):
+            raise OSError(ctypes.get_last_error(), f"ReadProcessMemory failed for pid {pid}")
+        return buffer.raw[: done.value]
+
+    try:
+        info = ProcessBasicInformation()
+        status = ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(info), ctypes.sizeof(info), None)
+        assert status == 0, f"NtQueryInformationProcess failed for pid {pid}: {status:#x}"
+        parameters = int.from_bytes(read(info.PebBaseAddress + 0x20, 8), "little")
+        environment = int.from_bytes(read(parameters + 0x80, 8), "little")
+        size = int.from_bytes(read(parameters + 0x3F0, 8), "little")
+        assert 0 < size < 4 * 1024 * 1024, f"implausible environment size {size} for pid {pid}"
+        return read(environment, size).decode("utf-16-le", "replace").replace("\0", "\n")
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def process_environment(pid, *, env, scratch):
+    """The environment of a live process, as text."""
+    if sys.platform == "win32":
+        return _windows_process_environment(pid)
     if sys.platform.startswith("linux"):
         try:
             return Path(f"/proc/{pid}/environ").read_bytes().decode("utf-8", "replace")
