@@ -335,7 +335,7 @@ For an instance started with `PGPASSFILE`, run `pg0 ui` with the same
 Browse every pg0 instance, database and table, look at table structure, and
 run SQL, all from the browser. Each database also gets an overview: size on
 disk, cache hit rate, vacuum and analyze state, unused indexes, a schema
-diagram, running queries and key settings. Press Ctrl+C to stop it.
+diagram, running queries and key settings. Press Ctrl+C to stop it (on Windows, Ctrl+Break also stops it).
 
 ![pg0 ui database overview](docs/pg0-ui.jpg)
 
@@ -496,7 +496,7 @@ backslash in the password, and the first matching entry is used. On macOS and
 Linux, remove all group and world access from the file, for example with
 `chmod 600`; pg0 refuses a file that group or world can access. On Windows,
 pg0 does not check the file's access rights, so restrict the file to your user
-yourself. The Windows path is not covered by the tests.
+yourself.
 
 The password comes from the first source that applies:
 
