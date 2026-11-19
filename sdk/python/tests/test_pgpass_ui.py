@@ -13,15 +13,6 @@ from .pgpass_support import (
     start_from_file,
 )
 
-# TODO(windows): the pg0 ui tests do not run on Windows yet. There pg0 opens the browser through
-# rundll32 (src/ui.rs open_browser), which a test cannot replace with a no-op as it does `open` and
-# `xdg-open`, and the shutdown on Ctrl-C (tokio ctrl_c) is unverified. See the PR description.
-skip_ui_on_windows = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pg0 ui opens a browser through rundll32 on Windows, which a test cannot intercept; "
-    "its Ctrl-C shutdown on Windows is unverified",
-)
-
 INSTANCES = '{"action":"instances"}'
 DATABASES = '{"action":"databases","instance":"t"}'
 TABLES_APP = '{"action":"tables","instance":"t","db":"app"}'
@@ -56,7 +47,6 @@ def test_ui_lists_instances_databases_tables_and_rows(started):
     ui.stop()
 
 
-@skip_ui_on_windows
 def test_ui_browses_other_database_with_single_entry(started):
     """Given a database other than the saved one, when its tables are browsed, expected success
     without another entry in the file."""
@@ -69,7 +59,6 @@ def test_ui_browses_other_database_with_single_entry(started):
     ui.stop()
 
 
-@skip_ui_on_windows
 def test_ui_session_leaks_no_password(started):
     """Given a browsing session, when every response, every file, and the ui process are scanned,
     expected no form of the instance password in output, argument list, environment, or file."""
@@ -95,17 +84,22 @@ def test_ui_session_leaks_no_password(started):
     assert home.state / "instances" / "t" / "instance.json" in scanned
 
 
-@skip_ui_on_windows
 @pytest.mark.parametrize("state", FILE_STATES)
 def test_ui_reports_unusable_file_and_keeps_serving(started, state):
     """Given a PGPASSFILE that is unset, empty, missing, unreadable, open, or without a matching
     entry, when the page lists the instance's databases, expected a credential error for that
     instance that names PGPASSFILE (and the file when named, and the entry), that is not an
-    authentication error, and that pg0 ui keeps serving (a second request still answers)."""
+    authentication error, and that pg0 ui keeps serving (a second request still answers). On Windows
+    an open file is accepted (pg0 checks no access rights there), so the databases are listed."""
     value = apply_file_state(started, state)
     try:
         ui = UiServer(started.home, value)
         code, first = ui.api(DATABASES)
+        if sys.platform == "win32" and state == "open":
+            assert code == 200, f"{state}: {first}"
+            assert '"app"' in first, f"{state}: {first}"
+            ui.stop()
+            return
         assert code != 200, f"{state}: {first}"
         assert "PGPASSFILE" in first, f"{state}: {first}"
         assert "authentication failed" not in first.lower(), f"{state}: {first}"
@@ -120,7 +114,6 @@ def test_ui_reports_unusable_file_and_keeps_serving(started, state):
             started.home.make_readable(started.file)
 
 
-@skip_ui_on_windows
 def test_ui_shutdown_removes_temporary_role(started):
     """Given pg0 ui shutdown, when the roles are listed, expected the temporary role is gone (the
     shutdown removal read the password from the file)."""
