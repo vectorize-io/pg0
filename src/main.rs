@@ -2247,11 +2247,9 @@ mod pgpass_builder_tests {
         }
     }
 
-    /// Given an instance with an empty saved password, when pg0 builds its psql command for later
-    /// commands, expected its arguments and environment hold no password form, the environment holds
-    /// PGPASSFILE, and no PGPASSWORD.
     #[test]
     fn psql_command_uses_pgpassfile_and_no_password() {
+        // The psql command of later commands for an instance started from PGPASSFILE.
         let pw = generated_password();
         let (args, envs) = psql_command("app", "app", 5433, Path::new("/abs/pgpass"));
         assert_absent("psql args", &args.join("\n"), &pw);
@@ -2261,8 +2259,6 @@ mod pgpass_builder_tests {
         assert!(args.iter().all(|a| !a.contains("passfile=")));
     }
 
-    /// Given the role statements that pg0 builds, when they are listed, expected the CREATE USER statement
-    /// is direct (no DO block) and follows SET log_min_error_statement = 'panic'.
     #[test]
     fn role_statements_create_user_directly_after_log_suppression() {
         let stmts = role_statements("app", "pw-placeholder");
@@ -2271,8 +2267,6 @@ mod pgpass_builder_tests {
         assert!(stmts.iter().all(|s| !s.contains("DO $$")));
     }
 
-    /// Given a generated password with an apostrophe, when the role statements are built, expected the
-    /// SQL-literal form appears only in the statement that sets the role password, and the scanner finds it.
     #[test]
     fn role_statements_scanner_detects_apostrophe_form() {
         let pw = generated_password();
@@ -2284,20 +2278,18 @@ mod pgpass_builder_tests {
         assert!(caught.is_err(), "the scanner detects the SQL-literal form");
     }
 
-    /// Given an instance.json written before this change (password set), when it loads, expected it
-    /// loads and the saved password is kept; and given an empty password, expected it loads as empty.
     #[test]
     fn state_files_load_current_fields_only() {
+        // An instance.json from before PGPASSFILE support keeps its saved password.
         let with = r#"{"pid":null,"port":5432,"data_dir":"/d","installation_dir":"/i","username":"u","password":"p","database":"db","version":"18"}"#;
         let empty = with.replace("\"password\":\"p\"", "\"password\":\"\"");
         assert_eq!(serde_json::from_str::<InstanceInfo>(with).unwrap().password, "p");
         assert_eq!(serde_json::from_str::<InstanceInfo>(&empty).unwrap().password, "");
     }
 
-    /// Given the bootstrap code, when its child commands are listed, expected no child process named psql
-    /// is started during pg0 start (the steps run in-process).
     #[test]
     fn bootstrap_runs_no_psql_child() {
+        // The role and grant steps run in-process.
         assert!(bootstrap_child_commands().iter().all(|c| !c.contains("psql")));
     }
 }
@@ -2306,9 +2298,9 @@ mod pgpass_builder_tests {
 mod password_source_tests {
     use super::*;
 
-    /// Given -P with a value, when the start arguments parse, expected the password is set (also when it equals the default).
     #[test]
     fn password_flag_parses_to_some() {
+        // -P postgres counts as explicit, although it equals the default.
         for args in [["pg0", "start", "-P", "postgres"], ["pg0", "start", "-P", "other"]] {
             match Cli::try_parse_from(args).unwrap().command {
                 Commands::Start { password, .. } => assert_eq!(password.as_deref(), Some(args[3])),
@@ -2317,17 +2309,15 @@ mod password_source_tests {
         }
     }
 
-    /// Given no -P, when the start arguments parse, expected no password (the default is applied after PGPASSFILE is considered).
     #[test]
     fn missing_password_flag_parses_to_none() {
+        // The default is applied after PGPASSFILE is considered.
         match Cli::try_parse_from(["pg0", "start"]).unwrap().command {
             Commands::Start { password, .. } => assert_eq!(password, None),
             _ => panic!("not a start command"),
         }
     }
 
-    /// Given the explicit password and PGPASSFILE value, when the source is resolved, expected -P first,
-    /// then the file, and the default for an unset or empty PGPASSFILE.
     #[test]
     fn password_source_prefers_flag_then_file_then_default() {
         let f = Some("/abs/pgpass".to_string());

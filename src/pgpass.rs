@@ -141,7 +141,6 @@ mod tests {
         ))
     }
 
-    /// Given \: and \\ in the password field, when the entry is read, expected : and \ in the password.
     #[test]
     fn select_decodes_escaped_colon_and_backslash() {
         assert_eq!(
@@ -150,13 +149,12 @@ mod tests {
         );
     }
 
-    /// Given an unneeded escape, when read, expected the escaped character itself (libpq: \a reads as a).
     #[test]
     fn select_keeps_plain_character_after_unneeded_escape() {
+        // libpq reads \a as a.
         assert_eq!(pick("127.0.0.1:5433:app:me:\\ab"), Some("ab".to_string()));
     }
 
-    /// Given * in each of the first four fields, when read, expected a match for any value.
     #[test]
     fn select_matches_wildcard_in_each_field() {
         for line in [
@@ -169,20 +167,17 @@ mod tests {
         }
     }
 
-    /// Given * in the fifth field, when read, expected the password is the literal *.
     #[test]
     fn select_keeps_star_in_password_literal() {
         assert_eq!(pick("127.0.0.1:5433:app:me:*"), Some("*".to_string()));
     }
 
-    /// Given comment lines and blank lines, when read, expected they are skipped.
     #[test]
     fn select_skips_comment_and_blank_lines() {
         let text = "# 127.0.0.1:5433:app:me:wrong\n\n   \n127.0.0.1:5433:app:me:right\n";
         assert_eq!(pick(text), Some("right".to_string()));
     }
 
-    /// Given CRLF line ends and no final newline, when read, expected the password without \r.
     #[test]
     fn select_handles_crlf_and_missing_final_newline() {
         assert_eq!(
@@ -192,7 +187,6 @@ mod tests {
         assert_eq!(pick("127.0.0.1:5433:app:me:pw\r\n"), Some("pw".to_string()));
     }
 
-    /// Given a line with fewer than five fields, when read, expected the line is skipped and a later line is used.
     #[test]
     fn select_skips_short_line() {
         assert_eq!(
@@ -202,7 +196,6 @@ mod tests {
         assert_eq!(pick("127.0.0.1:5433:app:me"), None);
     }
 
-    /// Given two matching lines, when read, expected the first.
     #[test]
     fn select_returns_first_match() {
         assert_eq!(
@@ -211,7 +204,6 @@ mod tests {
         );
     }
 
-    /// Given no line that matches host, port, database, or user, when read, expected None for each mismatch.
     #[test]
     fn select_returns_none_on_any_field_mismatch() {
         for line in [
@@ -224,7 +216,6 @@ mod tests {
         }
     }
 
-    /// Given a password with : and \ written by the escape function, when read back, expected the same password.
     #[test]
     fn written_password_reads_back_unchanged() {
         for pw in ["a:b", "a\\b", "::", "\\\\", ":\\:\\", "plain", "tail\\"] {
@@ -233,11 +224,10 @@ mod tests {
         }
     }
 
-    /// Given an owner-only file and a file with a group or world bit, when the permission check runs,
-    /// expected Ok for 0600 and 0400, and Err for every other mode with a group or world bit.
     #[test]
     #[cfg(unix)]
     fn only_owner_only_modes_pass_permission_check() {
+        // Windows has no Unix file modes.
         use std::os::unix::fs::PermissionsExt;
         let dir = unique_dir("pg0-pgpass-modes");
         std::fs::create_dir_all(&dir).unwrap();
