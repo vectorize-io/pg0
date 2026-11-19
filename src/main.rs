@@ -11,6 +11,8 @@ use tar::Archive;
 use thiserror::Error;
 use tracing_subscriber::EnvFilter;
 
+mod bootstrap;
+mod pgpass;
 mod ui;
 
 /// The embedded PostgreSQL bundle
@@ -63,6 +65,101 @@ struct Cli {
 }
 
 const DEFAULT_INSTANCE_NAME: &str = "default";
+const DEFAULT_PASSWORD: &str = "postgres";
+
+/// Where the instance password comes from.
+#[derive(Debug, PartialEq)]
+enum PasswordSource {
+    /// `-P` or `--password`, including a value equal to the default.
+    Explicit(String),
+    /// The file that `PGPASSFILE` names.
+    File(PathBuf),
+    /// Neither `-P` nor a non-empty `PGPASSFILE`.
+    Default,
+}
+
+/// The error for a password file that start or a later command cannot use. It names `PGPASSFILE`,
+/// the file, and the entry that the file needs.
+fn credential_error(e: &dyn std::fmt::Display, port: u16, database: &str, username: &str) -> CliError {
+    CliError::Other(format!(
+        "{}\nAdd a line for this instance to the file: 127.0.0.1:{}:{}:{}:<password>",
+        e, port, database, username
+    ))
+}
+
+/// How a later command authenticates to a saved instance.
+struct Credentials {
+    /// The password for the library settings.
+    password: String,
+    /// The password file for psql children. `None` for a password that is saved in `instance.json`.
+    pgpassfile: Option<PathBuf>,
+}
+
+impl Credentials {
+    fn saved(info: &InstanceInfo) -> Credentials {
+        Credentials { password: info.password.clone(), pgpassfile: None }
+    }
+}
+
+/// A saved password is used as is (state written before PGPASSFILE support). An empty saved
+/// password is read from the file that `PGPASSFILE` names, checked, and matched against the instance.
+fn instance_credentials(info: &InstanceInfo) -> Result<Credentials, CliError> {
+    if !info.password.is_empty() {
+        return Ok(Credentials::saved(info));
+    }
+    let value = std::env::var("PGPASSFILE").unwrap_or_default();
+    if value.is_empty() {
+        return Err(credential_error(
+            &"PGPASSFILE is not set, and this instance has no saved password. Set PGPASSFILE to the password file",
+            info.port,
+            &info.database,
+            &info.username,
+        ));
+    }
+    let path = std::env::current_dir()?.join(&value);
+    let password = pgpass::password_from_file(&path, "127.0.0.1", info.port, &info.database, &info.username)
+        .map_err(|e| credential_error(&e, info.port, &info.database, &info.username))?;
+    Ok(Credentials { password, pgpassfile: Some(path) })
+}
+
+/// The arguments and environment of a psql child that reads its password from a password file.
+/// The URI holds no password. libpq reads the file that `PGPASSFILE` names.
+fn psql_command(username: &str, database: &str, port: u16, pgpassfile: &Path) -> (Vec<String>, Vec<(String, String)>) {
+    (
+        vec![format!("postgresql://{}@127.0.0.1:{}/{}", username, port, database)],
+        vec![("PGPASSFILE".to_string(), pgpassfile.display().to_string())],
+    )
+}
+
+/// The connection URI of an instance. It holds no password when the instance has none saved.
+fn connection_uri(info: &InstanceInfo) -> String {
+    if info.password.is_empty() {
+        format!("postgresql://{}@127.0.0.1:{}/{}", info.username, info.port, info.database)
+    } else {
+        format!(
+            "postgresql://{}:{}@127.0.0.1:{}/{}",
+            info.username, info.password, info.port, info.database
+        )
+    }
+}
+
+/// Whether the instance is running and answers a query. A stopped instance needs no password.
+fn database_healthy(info: &InstanceInfo) -> Result<bool, CliError> {
+    if running_pid(info).is_none() {
+        return Ok(false);
+    }
+    let credentials = instance_credentials(info)?;
+    Ok(is_database_healthy_with(info, &credentials))
+}
+
+/// `-P` wins. Otherwise a non-empty `PGPASSFILE` names the file. Otherwise the default applies.
+fn resolve_password_source(explicit: Option<String>, pgpassfile: Option<String>) -> PasswordSource {
+    match (explicit, pgpassfile) {
+        (Some(pw), _) => PasswordSource::Explicit(pw),
+        (None, Some(path)) if !path.is_empty() => PasswordSource::File(PathBuf::from(path)),
+        _ => PasswordSource::Default,
+    }
+}
 
 #[derive(Subcommand)]
 enum Commands {
@@ -88,9 +185,9 @@ enum Commands {
         #[arg(short, long, default_value = "postgres")]
         username: String,
 
-        /// Password for the database
-        #[arg(short = 'P', long, default_value = "postgres")]
-        password: String,
+        /// Password for the database. Takes precedence over PGPASSFILE [default: postgres, when PGPASSFILE is unset or empty]
+        #[arg(short = 'P', long)]
+        password: Option<String>,
 
         /// Database name to create
         #[arg(short = 'n', long, default_value = "postgres")]
@@ -852,7 +949,7 @@ fn start(
     version: String,
     data_dir: Option<String>,
     username: String,
-    password: String,
+    source: PasswordSource,
     database: String,
     config: Vec<String>,
 ) -> Result<(), CliError> {
@@ -870,6 +967,17 @@ fn start(
         new_port
     } else {
         port
+    };
+
+    // Resolve the password before any state exists, so a bad password file leaves nothing behind.
+    let from_file = matches!(source, PasswordSource::File(_));
+    let password = match source {
+        PasswordSource::Explicit(password) => password,
+        PasswordSource::Default => DEFAULT_PASSWORD.to_string(),
+        PasswordSource::File(path) => {
+            pgpass::password_from_file(&path, "127.0.0.1", port, &database, &username)
+                .map_err(|e| credential_error(&e, port, &database, &username))?
+        }
     };
 
     let instance_dir = get_instance_dir(&name)?;
@@ -930,11 +1038,11 @@ fn start(
     // Extract bundled PostgreSQL
     let version_install_dir = extract_bundled_postgresql(&installation_dir, &version)?;
 
+    // Initialize the cluster ourselves; setup() then skips its own initdb.
+    // On Unix this keeps the password off disk (initdb reads it from stdin).
     // Windows initdb takes its locale from the OS (LC_ALL is ignored) and
-    // rejects localized names like "Turkish_Türkiye.1252" (#35).
-    // postgresql_embedded can't pass --locale, so initialize the cluster
-    // ourselves; setup() then skips its own initdb.
-    #[cfg(windows)]
+    // rejects localized names like "Turkish_Türkiye.1252" (#35), and
+    // postgresql_embedded can't pass --locale.
     if !data_dir.join("postgresql.conf").exists() {
         init_data_dir(&version_install_dir, &data_dir, &password)?;
     }
@@ -978,18 +1086,8 @@ fn start(
     // Note: postgresql_embedded always creates 'postgres' as the superuser
     if username != "postgres" {
         println!("Creating user '{}'...", username);
-        let psql_path = find_psql_binary(&installation_dir)?;
-        let create_user_sql = format!(
-            "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{}') THEN CREATE USER \"{}\" WITH SUPERUSER PASSWORD '{}'; END IF; END $$;",
-            username, username, password.replace('\'', "''")
-        );
-        let status = std::process::Command::new(&psql_path)
-            .arg(&format!("postgresql://postgres:{}@127.0.0.1:{}/postgres", password, port))
-            .arg("-c")
-            .arg(&create_user_sql)
-            .status()?;
-        if !status.success() {
-            eprintln!("Warning: Failed to create user '{}'", username);
+        if let Err(e) = bootstrap::create_role(port, &password, &username) {
+            eprintln!("Warning: Failed to create user '{}': {}", username, e);
         }
     }
 
@@ -1004,13 +1102,7 @@ fn start(
         }
         // Grant privileges to the user on the database
         if username != "postgres" {
-            let psql_path = find_psql_binary(&installation_dir)?;
-            let grant_sql = format!("GRANT ALL PRIVILEGES ON DATABASE \"{}\" TO \"{}\";", database, username);
-            let _ = std::process::Command::new(&psql_path)
-                .arg(&format!("postgresql://postgres:{}@127.0.0.1:{}/postgres", password, port))
-                .arg("-c")
-                .arg(&grant_sql)
-                .status();
+            let _ = bootstrap::grant_database(port, &password, &database, &username);
         }
     }
 
@@ -1023,7 +1115,8 @@ fn start(
         data_dir: data_dir.clone(),
         installation_dir,
         username: username.clone(),
-        password: password.clone(),
+        // A password from the file is read again by each later command. pg0 stores none of it.
+        password: if from_file { String::new() } else { password.clone() },
         database: database.clone(),
         version: version.clone(),
     };
@@ -1036,14 +1129,24 @@ fn start(
     println!("  PID:      {}", pid);
     println!("  Port:     {}", port);
     println!("  Username: {}", username);
-    println!("  Password: {}", password);
-    println!("  Database: {}", database);
-    println!("  Data dir: {}", data_dir.display());
-    println!();
-    println!(
-        "Connection URI: postgresql://{}:{}@127.0.0.1:{}/{}",
-        username, password, port, database
-    );
+    if from_file {
+        println!("  Database: {}", database);
+        println!("  Data dir: {}", data_dir.display());
+        println!();
+        println!(
+            "Connection URI: postgresql://{}@127.0.0.1:{}/{}",
+            username, port, database
+        );
+    } else {
+        println!("  Password: {}", password);
+        println!("  Database: {}", database);
+        println!("  Data dir: {}", data_dir.display());
+        println!();
+        println!(
+            "Connection URI: postgresql://{}:{}@127.0.0.1:{}/{}",
+            username, password, port, database
+        );
+    }
     println!();
     if name == DEFAULT_INSTANCE_NAME {
         println!("Use 'pg0 stop' to stop the server.");
@@ -1086,19 +1189,37 @@ fn kill_if_postgres(pid: u32) {
 }
 
 /// Run initdb exactly as postgresql_embedded does, plus `--locale=C`.
-/// Only called on Windows; kept cross-platform so it is tested everywhere.
-#[cfg_attr(not(windows), allow(dead_code))]
+/// On Unix the password goes to initdb through its standard input (`--pwfile=/dev/stdin`), so no
+/// password file exists on disk. Windows has no `/dev/stdin` and uses a temporary file.
 fn init_data_dir(version_dir: &Path, data_dir: &Path, password: &str) -> Result<(), CliError> {
-    let pwfile = std::env::temp_dir().join(format!("pg0-initdb-{}.pw", process::id()));
-    fs::write(&pwfile, password)?;
     let initdb = if cfg!(windows) { "initdb.exe" } else { "initdb" };
-    let output = process::Command::new(version_dir.join("bin").join(initdb))
+    let mut command = process::Command::new(version_dir.join("bin").join(initdb));
+    command
         .arg("-D")
         .arg(data_dir)
-        .args(["-U", "postgres", "--auth=password", "--encoding=UTF8", "--locale=C"])
-        .arg(format!("--pwfile={}", pwfile.display()))
-        .output();
-    let _ = fs::remove_file(&pwfile);
+        .args(["-U", "postgres", "--auth=password", "--encoding=UTF8", "--locale=C"]);
+
+    #[cfg(unix)]
+    let output = {
+        use std::io::Write;
+        command
+            .arg("--pwfile=/dev/stdin")
+            .stdin(process::Stdio::piped())
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped());
+        let mut child = command.spawn()?;
+        child.stdin.take().expect("piped stdin").write_all(password.as_bytes())?;
+        child.wait_with_output()
+    };
+
+    #[cfg(not(unix))]
+    let output = {
+        let pwfile = std::env::temp_dir().join(format!("pg0-initdb-{}.pw", process::id()));
+        fs::write(&pwfile, password)?;
+        let output = command.arg(format!("--pwfile={}", pwfile.display())).output();
+        let _ = fs::remove_file(&pwfile);
+        output
+    };
     let output = output?;
     if !output.status.success() {
         return Err(CliError::Other(format!(
@@ -1303,12 +1424,9 @@ fn info(name: String, output_format: OutputFormat) -> Result<(), CliError> {
 
     let output = match instance {
         Some(info) => {
-            let running = is_database_healthy(&info);
+            let running = database_healthy(&info)?;
             if running {
-                let uri = format!(
-                    "postgresql://{}:{}@127.0.0.1:{}/{}",
-                    info.username, info.password, info.port, info.database
-                );
+                let uri = connection_uri(&info);
                 InfoOutput {
                     name: name.clone(),
                     running: true,
@@ -1419,6 +1537,10 @@ fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
 /// memory has been removed). Do not report such an instance as running:
 /// callers use this status to decide whether it is safe to reuse a database.
 fn is_database_healthy(info: &InstanceInfo) -> bool {
+    is_database_healthy_with(info, &Credentials::saved(info))
+}
+
+fn is_database_healthy_with(info: &InstanceInfo, credentials: &Credentials) -> bool {
     if running_pid(info).is_none() {
         return false;
     }
@@ -1431,7 +1553,8 @@ fn is_database_healthy(info: &InstanceInfo) -> bool {
         return false;
     }
 
-    let output = process::Command::new(psql_path)
+    let mut command = process::Command::new(psql_path);
+    command
         // Avoid user psql configuration and fail instead of prompting if the
         // saved instance credentials no longer work.
         .args(["-X", "-w", "-q", "-v", "ON_ERROR_STOP=1"])
@@ -1443,9 +1566,13 @@ fn is_database_healthy(info: &InstanceInfo) -> bool {
         // enough for Windows, where each connection starts a new backend
         // process and antivirus scanning can take seconds (#41).
         .env("PGCONNECT_TIMEOUT", "10")
-        .env("PGOPTIONS", "-c statement_timeout=5000")
-        .env("PGPASSWORD", &info.password)
-        .output();
+        .env("PGOPTIONS", "-c statement_timeout=5000");
+    match &credentials.pgpassfile {
+        // The password stays in the file. libpq reads it.
+        Some(file) => command.env("PGPASSFILE", file).env_remove("PGPASSWORD"),
+        None => command.env("PGPASSWORD", &credentials.password),
+    };
+    let output = command.output();
     match output {
         Ok(output) if output.status.success() => true,
         Ok(output) => {
@@ -1478,17 +1605,20 @@ fn psql(name: String, args: Vec<String>) -> Result<(), CliError> {
     // invoked against an instance that another `pg0 start` already extracted.
     ensure_runtime_libs_for_psql(&psql_path)?;
 
-    // Build connection URI
-    let uri = format!(
-        "postgresql://{}:{}@127.0.0.1:{}/{}",
-        info.username, info.password, info.port, info.database
-    );
+    let credentials = instance_credentials(&info)?;
 
     // Execute psql with the connection URI and any additional args
-    let status = std::process::Command::new(&psql_path)
-        .arg(&uri)
-        .args(&args)
-        .status()?;
+    let mut command = std::process::Command::new(&psql_path);
+    match &credentials.pgpassfile {
+        Some(file) => {
+            let (uri_args, envs) = psql_command(&info.username, &info.database, info.port, file);
+            command.args(uri_args).envs(envs).env_remove("PGPASSWORD");
+        }
+        None => {
+            command.arg(connection_uri(&info));
+        }
+    }
+    let status = command.args(&args).status()?;
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
@@ -1614,6 +1744,8 @@ fn install_extension(instance_name: String, extension_name: String) -> Result<()
         return Err(CliError::NoInstance);
     }
 
+    let credentials = instance_credentials(&info)?;
+
     println!("Fetching available extensions...");
 
     let available = postgresql_extensions::blocking::get_available_extensions()?;
@@ -1650,7 +1782,7 @@ fn install_extension(instance_name: String, extension_name: String) -> Result<()
         version: version_req.clone(),
         port: info.port,
         username: info.username.clone(),
-        password: info.password.clone(),
+        password: credentials.password.clone(),
         data_dir: info.data_dir.clone(),
         installation_dir: version_install_dir,
         ..Default::default()
@@ -1677,12 +1809,9 @@ fn list(output_format: OutputFormat) -> Result<(), CliError> {
     let mut instances: Vec<InfoOutput> = Vec::new();
     for name in &instance_names {
         if let Some(info) = load_instance(name)? {
-            let running = is_database_healthy(&info);
+            let running = database_healthy(&info)?;
             let output = if running {
-                let uri = format!(
-                    "postgresql://{}:{}@127.0.0.1:{}/{}",
-                    info.username, info.password, info.port, info.database
-                );
+                let uri = connection_uri(&info);
                 InfoOutput {
                     name: name.clone(),
                     running: true,
@@ -2073,6 +2202,143 @@ mod tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod pgpass_builder_tests {
+    use super::*;
+    use bootstrap::{bootstrap_child_commands, role_statements};
+
+    /// A password built at run time with `:`, `\`, and `'` in it.
+    fn generated_password() -> String {
+        let mut bytes = [0u8; 12];
+        std::io::Read::read_exact(&mut fs::File::open("/dev/urandom").unwrap(), &mut bytes).unwrap();
+        let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        format!("{}:{}\\{}'{}", &hex[..6], &hex[6..12], &hex[12..18], &hex[18..])
+    }
+
+    fn sql_escape(pw: &str) -> String {
+        pw.replace('\'', "''")
+    }
+
+    fn url_encode(pw: &str) -> String {
+        pw.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+                _ => format!("%{:02X}", b),
+            })
+            .collect()
+    }
+
+    fn json_escape(pw: &str) -> String {
+        let quoted = serde_json::to_string(pw).unwrap();
+        quoted[1..quoted.len() - 1].to_string()
+    }
+
+    /// Fail when any form of the password occurs in the text.
+    fn assert_absent(channel: &str, haystack: &str, pw: &str) {
+        let forms = [
+            ("raw", pw.to_string()),
+            ("json", json_escape(pw)),
+            ("url", url_encode(pw)),
+            ("pgpass", pgpass::escape(pw)),
+            ("sql", sql_escape(pw)),
+        ];
+        for (name, form) in forms {
+            assert!(!haystack.contains(&form), "{} holds the password in its {} form", channel, name);
+        }
+    }
+
+    /// Given an instance with an empty saved password, when pg0 builds its psql command for later
+    /// commands, expected its arguments and environment hold no password form, the environment holds
+    /// PGPASSFILE, and no PGPASSWORD.
+    #[test]
+    fn psql_command_uses_pgpassfile_and_no_password() {
+        let pw = generated_password();
+        let (args, envs) = psql_command("app", "app", 5433, Path::new("/abs/pgpass"));
+        assert_absent("psql args", &args.join("\n"), &pw);
+        assert_absent("psql env", &envs.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("\n"), &pw);
+        assert!(envs.iter().any(|(k, v)| k == "PGPASSFILE" && v == "/abs/pgpass"));
+        assert!(envs.iter().all(|(k, _)| k != "PGPASSWORD"));
+        assert!(args.iter().all(|a| !a.contains("passfile=")));
+    }
+
+    /// Given the role statements that pg0 builds, when they are listed, expected the CREATE USER statement
+    /// is direct (no DO block) and follows SET log_min_error_statement = 'panic'.
+    #[test]
+    fn role_statements_create_user_directly_after_log_suppression() {
+        let stmts = role_statements("app", "pw-placeholder");
+        assert_eq!(stmts[0], "SET log_min_error_statement = 'panic'");
+        assert!(stmts[1].starts_with("CREATE USER \"app\" WITH SUPERUSER PASSWORD '"));
+        assert!(stmts.iter().all(|s| !s.contains("DO $$")));
+    }
+
+    /// Given a generated password with an apostrophe, when the role statements are built, expected the
+    /// SQL-literal form appears only in the statement that sets the role password, and the scanner finds it.
+    #[test]
+    fn role_statements_scanner_detects_apostrophe_form() {
+        let pw = generated_password();
+        let stmts = role_statements("app", &pw);
+        assert!(stmts[0].find(&sql_escape(&pw)).is_none());
+        assert!(stmts[1].contains(&sql_escape(&pw)));
+        let joined = stmts.join("\n");
+        let caught = std::panic::catch_unwind(|| assert_absent("role statements", &joined, &pw));
+        assert!(caught.is_err(), "the scanner detects the SQL-literal form");
+    }
+
+    /// Given an instance.json written before this change (password set), when it loads, expected it
+    /// loads and the saved password is kept; and given an empty password, expected it loads as empty.
+    #[test]
+    fn state_files_load_current_fields_only() {
+        let with = r#"{"pid":null,"port":5432,"data_dir":"/d","installation_dir":"/i","username":"u","password":"p","database":"db","version":"18"}"#;
+        let empty = with.replace("\"password\":\"p\"", "\"password\":\"\"");
+        assert_eq!(serde_json::from_str::<InstanceInfo>(with).unwrap().password, "p");
+        assert_eq!(serde_json::from_str::<InstanceInfo>(&empty).unwrap().password, "");
+    }
+
+    /// Given the bootstrap code, when its child commands are listed, expected no child process named psql
+    /// is started during pg0 start (the steps run in-process).
+    #[test]
+    fn bootstrap_runs_no_psql_child() {
+        assert!(bootstrap_child_commands().iter().all(|c| !c.contains("psql")));
+    }
+}
+
+#[cfg(test)]
+mod password_source_tests {
+    use super::*;
+
+    /// Given -P with a value, when the start arguments parse, expected the password is set (also when it equals the default).
+    #[test]
+    fn password_flag_parses_to_some() {
+        for args in [["pg0", "start", "-P", "postgres"], ["pg0", "start", "-P", "other"]] {
+            match Cli::try_parse_from(args).unwrap().command {
+                Commands::Start { password, .. } => assert_eq!(password.as_deref(), Some(args[3])),
+                _ => panic!("not a start command"),
+            }
+        }
+    }
+
+    /// Given no -P, when the start arguments parse, expected no password (the default is applied after PGPASSFILE is considered).
+    #[test]
+    fn missing_password_flag_parses_to_none() {
+        match Cli::try_parse_from(["pg0", "start"]).unwrap().command {
+            Commands::Start { password, .. } => assert_eq!(password, None),
+            _ => panic!("not a start command"),
+        }
+    }
+
+    /// Given the explicit password and PGPASSFILE value, when the source is resolved, expected -P first,
+    /// then the file, and the default for an unset or empty PGPASSFILE.
+    #[test]
+    fn password_source_prefers_flag_then_file_then_default() {
+        let f = Some("/abs/pgpass".to_string());
+        assert_eq!(resolve_password_source(Some("pw".into()), f.clone()), PasswordSource::Explicit("pw".into()));
+        assert_eq!(resolve_password_source(Some("postgres".into()), f.clone()), PasswordSource::Explicit("postgres".into()));
+        assert_eq!(resolve_password_source(None, f), PasswordSource::File(PathBuf::from("/abs/pgpass")));
+        assert_eq!(resolve_password_source(None, Some(String::new())), PasswordSource::Default);
+        assert_eq!(resolve_password_source(None, None), PasswordSource::Default);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -2091,7 +2357,8 @@ fn main() {
         } => {
             let port_was_specified = port.is_some();
             let port = port.unwrap_or(5432);
-            start(name, port, port_was_specified, version, data_dir, username, password, database, config)
+            let source = resolve_password_source(password, std::env::var("PGPASSFILE").ok());
+            start(name, port, port_was_specified, version, data_dir, username, source, database, config)
         }
         Commands::Stop { name, timeout } => stop(name, timeout),
         Commands::Drop { name, force } => drop_instance(name, force),

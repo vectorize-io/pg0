@@ -2,6 +2,12 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Password-file input through the environment variable `PGPASSFILE`. On Windows, pg0 does not check the file's access rights. An explicit `-P` or `--password` takes precedence. With no explicit password, a named password file that is missing, unreadable, has group or world access, or has no matching entry causes an error instead of a fallback to `postgres`. This also applies when `PGPASSFILE` was exported for another tool.
+
 ## [0.17.0] - 2026-11-17
 
 ### Added

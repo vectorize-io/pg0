@@ -146,12 +146,14 @@ async fn serve(host: String, port: u16) -> Result<(), CliError> {
         if let Ok(Some(info)) = load_instance(&name) {
             let drop = async {
                 let mut conn = admin_conn(&info).await?;
-                conn.execute(format!("DROP ROLE IF EXISTS {}", quote_ident(&state.role)).as_str()).await?;
-                Ok::<_, sqlx::Error>(())
+                conn.execute(format!("DROP ROLE IF EXISTS {}", quote_ident(&state.role)).as_str())
+                    .await
+                    .map_err(|e| db_message(&e))?;
+                Ok::<_, String>(())
             };
             let error = match tokio::time::timeout(Duration::from_secs(5), drop).await {
                 Ok(Ok(())) => continue,
-                Ok(Err(e)) => db_message(&e),
+                Ok(Err(e)) => e,
                 Err(_) => "timed out".to_string(),
             };
             eprintln!(
@@ -577,20 +579,23 @@ async fn connect(options: PgConnectOptions) -> Result<PgConnection, sqlx::Error>
         .map_err(|_| sqlx::Error::PoolTimedOut)?
 }
 
-/// A superuser connection, used only to create and drop the read-only role.
-async fn admin_conn(info: &InstanceInfo) -> Result<PgConnection, sqlx::Error> {
+/// A superuser connection, used only to create and drop the read-only role. An instance with an
+/// empty saved password gets its password from the file that `PGPASSFILE` names, each time.
+async fn admin_conn(info: &InstanceInfo) -> Result<PgConnection, String> {
+    let credentials = crate::instance_credentials(info).map_err(|e| e.to_string())?;
     connect(
         base_options(info)
             .username(&info.username)
-            .password(&info.password)
+            .password(&credentials.password)
             .database(&info.database),
     )
     .await
+    .map_err(|e| db_message(&e))
 }
 
 /// (Re)create this run's read-only role in the instance and return its password.
 async fn create_role(state: &State, info: &InstanceInfo) -> Result<String, String> {
-    let mut conn = admin_conn(info).await.map_err(|e| db_message(&e))?;
+    let mut conn = admin_conn(info).await?;
 
     // Remove roles left behind by `pg0 ui` runs that are no longer alive.
     let stale: Vec<(String,)> = sqlx::query_as("SELECT rolname::text FROM pg_roles WHERE rolname ~ '^pg0_ui_[0-9]+$'")

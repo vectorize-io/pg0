@@ -239,6 +239,9 @@ pg0 start
 pg0 start --port 5433 --username myuser --password mypass --database myapp
 ```
 
+To keep the password off the command line, supply it from a file; see
+[Password file (PGPASSFILE)](#password-file-pgpassfile).
+
 ### Stop PostgreSQL
 
 ```bash
@@ -295,6 +298,9 @@ pg0 psql -c "SELECT version();"
 pg0 psql -f schema.sql
 ```
 
+For an instance started with `PGPASSFILE`, run `pg0 psql` with the same
+`PGPASSFILE`; see [Password file (PGPASSFILE)](#password-file-pgpassfile).
+
 ### View Logs
 
 View PostgreSQL logs for debugging startup issues or errors:
@@ -322,6 +328,9 @@ pg0 ui                    # http://<this machine>:5050, opens your browser
 pg0 ui --port 8080
 pg0 ui --host 127.0.0.1   # this machine only
 ```
+
+For an instance started with `PGPASSFILE`, run `pg0 ui` with the same
+`PGPASSFILE`; see [Password file (PGPASSFILE)](#password-file-pgpassfile).
 
 Browse every pg0 instance, database and table, look at table structure, and
 run SQL, all from the browser. Each database also gets an overview: size on
@@ -409,7 +418,7 @@ Options:
   -p, --port <PORT>           Port to listen on [default: 5432]
   -d, --data-dir <DATA_DIR>   Data directory [default: ~/.pg0/instances/<name>/data]
   -u, --username <USERNAME>   Username [default: postgres]
-  -P, --password <PASSWORD>   Password [default: postgres]
+  -P, --password <PASSWORD>   Password. Takes precedence over PGPASSFILE [default: postgres, when PGPASSFILE is unset or empty]
   -n, --database <DATABASE>   Database name [default: postgres]
   -c, --config <KEY=VALUE>    PostgreSQL config option (can repeat)
 ```
@@ -468,6 +477,56 @@ No symbolic links are needed on Windows.
 
 `PG0_EXECUTABLE` is a runtime setting. The existing `PG0_BINARY_PATH` setting is
 used only when building a Python wheel.
+
+### Password file (PGPASSFILE)
+
+`pg0 start` can read the instance password from a `.pgpass`-format file that
+the `PGPASSFILE` environment variable names, which keeps the password off the
+command line:
+
+```bash
+PGPASSFILE=~/.local/share/myapp/pgpass pg0 start --port 5433 --username myuser --database myapp
+```
+
+For this command the file needs an entry such as
+`127.0.0.1:5433:myapp:myuser:<password>`. Each line holds
+`hostname:port:database:username:password`. The hostname is `127.0.0.1`, `*`
+matches any value in the first four fields, `\:` and `\\` escape a colon and a
+backslash in the password, and the first matching entry is used. On macOS and
+Linux, remove all group and world access from the file, for example with
+`chmod 600`; pg0 refuses a file that group or world can access. On Windows,
+pg0 does not check the file's access rights, so restrict the file to your user
+yourself. The Windows path is not covered by the tests.
+
+The password comes from the first source that applies:
+
+| Source | When |
+|--------|------|
+| `-P` / `--password` | The option is given. pg0 does not read the file. |
+| The file that `PGPASSFILE` names | `PGPASSFILE` is set and not empty. |
+| `postgres` | Neither of the above. |
+
+When `PGPASSFILE` is set and no password option is given, pg0 does not fall
+back to `postgres`, even when `PGPASSFILE` was exported for another tool. A
+missing file, an unreadable file, a file that group or world can access, or a
+file without a matching entry stops `pg0 start` with an error that names
+`PGPASSFILE` and the file. For a missing or unreadable file, or a file without
+a matching entry, the error also names the required hostname, port, database,
+and username.
+
+When the password comes from the file, pg0 saves an empty password and no path
+to the file. Set the same `PGPASSFILE` when you run `info`, `list`, `psql`,
+`install-extension`, or `ui` for that instance; a relative path resolves from
+the working directory of each command. `stop` and `logs` need no file. `info`
+and `list` print connection URLs without the password.
+
+For such an instance, `info`, `list`, `psql`, and `install-extension` exit with
+a non-zero status when `PGPASSFILE` is unset or empty, or when its file is
+missing, unreadable, open to group or world, or without a matching entry.
+`pg0 ui` reports the same problem as an error for that instance and keeps
+serving. The error names `PGPASSFILE`, the file when one is named, and the
+required entry fields. A password-file error is not reported as a stopped
+instance or as a database authentication error.
 
 ## How It Works
 
