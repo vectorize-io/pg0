@@ -1,5 +1,6 @@
 """`pg0 ui` reads the instance password from the file that PGPASSFILE names."""
 
+import json
 import sys
 
 import pytest
@@ -101,10 +102,12 @@ def test_ui_reports_unusable_file_and_keeps_serving(started, state):
             ui.stop()
             return
         assert code != 200, f"{state}: {first}"
-        assert "PGPASSFILE" in first, f"{state}: {first}"
-        assert "authentication failed" not in first.lower(), f"{state}: {first}"
+        # The response is JSON, so a Windows path in it has escaped backslashes; read the message.
+        error = json.loads(first)["error"]
+        assert "PGPASSFILE" in error, f"{state}: {first}"
+        assert "authentication failed" not in error.lower(), f"{state}: {first}"
         if state not in ("unset", "empty"):
-            assert str(value) in first, f"{state} names the file: {first}"
+            assert str(value) in error, f"{state} names the file: {first}"
         code, second = ui.api(INSTANCES)
         assert code == 200, f"{state}: the ui keeps serving"
         assert '"t"' in second, f"{state}: {second}"
