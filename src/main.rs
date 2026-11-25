@@ -487,6 +487,9 @@ fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> R
         if stripped_path.as_os_str().is_empty() {
             continue;
         }
+        if cfg!(target_os = "linux") && is_newer_glibc_lib(&stripped_path) {
+            continue;
+        }
 
         let dest_path = version_dir.join(&stripped_path);
         if let Some(parent) = dest_path.parent() {
@@ -507,6 +510,17 @@ fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> R
         }
     }
     Ok(())
+}
+
+/// Since 18.7 the theseus-rs Linux bundles ship system libraries copied from
+/// Debian 12. These three need GLIBC 2.36, above our 2.35 baseline (Ubuntu
+/// 22.04), and every supported distro already has them, so use the system copy.
+/// ponytail: fixed list; re-check with `objdump -T lib/*.so*` on each PG bump.
+#[cfg(not(windows))]
+fn is_newer_glibc_lib(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    path.parent() == Some(Path::new("lib"))
+        && ["libstdc++.so.6", "libcrypt.so.1", "libexpat.so.1"].iter().any(|l| name.starts_with(l))
 }
 
 #[cfg(windows)]
@@ -2052,6 +2066,10 @@ mod tests {
         l.set_entry_type(tar::EntryType::Link);
         builder.append_link(&mut l, "pg-top/tz/Skopje", "pg-top/tz/Sarajevo").unwrap();
         let bundle = builder.into_inner().unwrap().finish().unwrap();
+
+        assert!(is_newer_glibc_lib(Path::new("lib/libstdc++.so.6.0.30")));
+        assert!(!is_newer_glibc_lib(Path::new("lib/libssl.so.3")));
+        assert!(!is_newer_glibc_lib(Path::new("bin/libstdc++.so.6")));
 
         let test_dir = unique_dir("pg0-hardlink");
         extract_postgresql_archive(&bundle, &test_dir).unwrap();

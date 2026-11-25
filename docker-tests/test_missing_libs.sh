@@ -61,9 +61,6 @@ echo "=== Stopping PostgreSQL ==="
 pg0 stop
 sleep 1
 
-echo "=== Removing extracted installation to force re-extraction ==="
-rm -rf ~/.pg0/installation
-echo "Installation directory cleared."
 '
 
 echo ""
@@ -73,6 +70,8 @@ echo "=== Phase 2: Remove libgssapi-krb5-2 to simulate missing library ==="
 # the deps we expect users to install themselves, so removing it still hits
 # the detection code path.
 apt-get remove -y libgssapi-krb5-2 2>&1 | tail -3
+# Since PostgreSQL 18.7 the bundle ships its own copy too; remove it as well.
+rm -f /home/pguser/.pg0/installation/*/lib/libgssapi_krb5.so*
 
 echo ""
 echo "=== Phase 3: Verify pg0 detects missing libraries ==="
