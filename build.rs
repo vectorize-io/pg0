@@ -121,9 +121,9 @@ fn bundle_pgvector(pg_version: &str, pgvector_tag: &str, pgvector_repo: &str, ou
         "aarch64-apple-darwin" => "aarch64-apple-darwin",
         "x86_64-apple-darwin" => "x86_64-apple-darwin",
         "x86_64-unknown-linux-gnu" => "x86_64-unknown-linux-gnu",
-        "x86_64-unknown-linux-musl" => "x86_64-unknown-linux-gnu", // musl uses gnu pgvector
+        "x86_64-unknown-linux-musl" => "x86_64-unknown-linux-musl",
         "aarch64-unknown-linux-gnu" => "aarch64-unknown-linux-gnu",
-        "aarch64-unknown-linux-musl" => "aarch64-unknown-linux-gnu", // musl uses gnu pgvector
+        "aarch64-unknown-linux-musl" => "aarch64-unknown-linux-musl",
         "x86_64-pc-windows-msvc" => "x86_64-pc-windows-msvc",
         _ => {
             eprintln!(

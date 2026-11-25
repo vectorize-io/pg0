@@ -134,7 +134,8 @@ jobs:
           - platform: alpine-amd64
             cli_script: docker-tests/test_alpine_amd64.sh
             python_script: docker-tests/python/test_alpine_amd64.sh
-            needs_local_binary: false
+            needs_local_binary: true
+            target: x86_64-unknown-linux-musl
           # Ubuntu 24.04 + 25.10. 25.10 only works with the libxml2/ICU
           # bundling added in this binary, so the test must run against a
           # fresh local build rather than the latest released artifact.
@@ -153,12 +154,23 @@ jobs:
       - name: Install Rust
         if: matrix.needs_local_binary
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
 
       - name: Build Linux binary
-        if: matrix.needs_local_binary
+        if: matrix.needs_local_binary && !matrix.target
         run: |
           cargo build --release
           echo "PG0_BINARY_PATH=$(pwd)/target/release/pg0" >> $GITHUB_ENV
+
+      - name: Build Linux musl binary
+        if: matrix.needs_local_binary && matrix.target
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          cargo build --release --target ${{ matrix.target }}
+          echo "PG0_BINARY_PATH=$(pwd)/target/${{ matrix.target }}/release/pg0" >> $GITHUB_ENV
 
       - name: Run CLI Docker test
         run: |
