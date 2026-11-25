@@ -495,6 +495,13 @@ fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> R
 
         if entry.header().entry_type().is_dir() {
             fs::create_dir_all(&dest_path)?;
+        } else if entry.header().entry_type().is_hard_link() {
+            // Link targets carry the same top-level directory we strip above
+            // (18.7's timezone files are hard links, e.g. Skopje -> Sarajevo).
+            let target: PathBuf = entry.link_name()?.unwrap_or_default().components().skip(1).collect();
+            let target = version_dir.join(target);
+            let _ = fs::remove_file(&dest_path);
+            fs::hard_link(&target, &dest_path).or_else(|_| fs::copy(&target, &dest_path).map(|_| ()))?;
         } else {
             entry.unpack(&dest_path)?;
         }
@@ -2029,6 +2036,26 @@ mod tests {
         // setup() skips its own initdb when this file exists.
         assert!(data_dir.join("postgresql.conf").exists());
 
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn extract_handles_hard_links_under_top_dir() {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        let mut h = tar::Header::new_gnu();
+        h.set_size(3);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        builder.append_data(&mut h, "pg-top/tz/Sarajevo", &b"abc"[..]).unwrap();
+        let mut l = tar::Header::new_gnu();
+        l.set_size(0);
+        l.set_entry_type(tar::EntryType::Link);
+        builder.append_link(&mut l, "pg-top/tz/Skopje", "pg-top/tz/Sarajevo").unwrap();
+        let bundle = builder.into_inner().unwrap().finish().unwrap();
+
+        let test_dir = unique_dir("pg0-hardlink");
+        extract_postgresql_archive(&bundle, &test_dir).unwrap();
+        assert_eq!(fs::read(test_dir.join("tz/Skopje")).unwrap(), b"abc");
         fs::remove_dir_all(test_dir).unwrap();
     }
 
