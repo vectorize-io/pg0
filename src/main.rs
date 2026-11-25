@@ -781,19 +781,25 @@ fn check_shared_libraries(bin_dir: &std::path::Path) -> Result<(), CliError> {
 }
 
 /// Install pgvector extension files into the PostgreSQL installation
-fn install_pgvector(installation_dir: &PathBuf, pg_version: &str) -> Result<(), CliError> {
-    let pg_major = pg_version.split('.').next().unwrap_or("16");
-    let pgvector_version = env!("PGVECTOR_VERSION");
+/// Version directories under `installation_dir` (e.g. `18.7.0`), newest first.
+/// After a pg0 upgrade the old minor version's directory is still there, and
+/// `read_dir` order is arbitrary, so callers must not just take the first entry.
+fn version_dirs(installation_dir: &Path) -> Vec<PathBuf> {
+    let key = |p: &PathBuf| -> Vec<u64> {
+        p.file_name().and_then(|n| n.to_str()).unwrap_or("")
+            .split('.').map(|x| x.parse().unwrap_or(0)).collect()
+    };
+    let mut dirs: Vec<PathBuf> = fs::read_dir(installation_dir)
+        .map(|it| it.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    dirs.retain(|p| p.is_dir() && p.file_name().and_then(|n| n.to_str())
+        .and_then(|n| n.chars().next()).map_or(false, |c| c.is_ascii_digit()));
+    dirs.sort_by(|a, b| key(b).cmp(&key(a)));
+    dirs
+}
 
-    // Find the version-specific installation directory
-    let version_dir = fs::read_dir(installation_dir)?
-        .filter_map(|e| e.ok())
-        .find(|e| e.path().is_dir() && e.file_name().to_string_lossy().starts_with(pg_major))
-        .map(|e| e.path())
-        .ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "PostgreSQL installation directory not found"
-        ))?;
+fn install_pgvector(version_dir: &Path) -> Result<(), CliError> {
+    let pgvector_version = env!("PGVECTOR_VERSION");
 
     let lib_dir = version_dir.join("lib");
     let extension_dir = version_dir.join("share").join("extension");
@@ -945,7 +951,7 @@ fn start(
         username: username.clone(),
         password: password.clone(),
         data_dir: data_dir.clone(),
-        installation_dir: version_install_dir,
+        installation_dir: version_install_dir.clone(),
         configuration,
         trust_installation_dir: true, // Use our extracted files
         temporary: false, // Never delete data directory on drop - pg0 manages data lifecycle explicitly
@@ -957,7 +963,7 @@ fn start(
     postgresql.setup()?;
 
     // Install pgvector extension
-    if let Err(e) = install_pgvector(&installation_dir, &version) {
+    if let Err(e) = install_pgvector(&version_install_dir) {
         eprintln!("Warning: Failed to install pgvector: {}", e);
         eprintln!("You can try installing it manually with: pg0 install-extension vector");
     }
@@ -1151,12 +1157,10 @@ fn find_pg_ctl_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
     let pg_ctl_name = if cfg!(windows) { "pg_ctl.exe" } else { "pg_ctl" };
 
     // Same layout as find_psql_binary: installation_dir/<version>/bin/pg_ctl
-    if let Ok(entries) = fs::read_dir(installation_dir) {
-        for entry in entries.flatten() {
-            let candidate = entry.path().join("bin").join(pg_ctl_name);
-            if candidate.exists() {
-                return Ok(candidate);
-            }
+    for dir in version_dirs(installation_dir) {
+        let candidate = dir.join("bin").join(pg_ctl_name);
+        if candidate.exists() {
+            return Ok(candidate);
         }
     }
 
@@ -1388,12 +1392,10 @@ fn find_psql_binary(installation_dir: &PathBuf) -> Result<PathBuf, CliError> {
     let psql_name = if cfg!(windows) { "psql.exe" } else { "psql" };
 
     // Look for psql in installation_dir/*/bin/psql (version subdirectory)
-    if let Ok(entries) = fs::read_dir(installation_dir) {
-        for entry in entries.flatten() {
-            let psql_path = entry.path().join("bin").join(psql_name);
-            if psql_path.exists() {
-                return Ok(psql_path);
-            }
+    for dir in version_dirs(installation_dir) {
+        let psql_path = dir.join("bin").join(psql_name);
+        if psql_path.exists() {
+            return Ok(psql_path);
         }
     }
 
@@ -1588,17 +1590,8 @@ fn logs(name: String, lines: Option<usize>, follow: bool) -> Result<(), CliError
 }
 
 fn find_installed_version(installation_dir: &PathBuf) -> Result<String, CliError> {
-    if let Ok(entries) = fs::read_dir(installation_dir) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    // Check if it looks like a version directory
-                    if name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                        return Ok(name.to_string());
-                    }
-                }
-            }
-        }
+    if let Some(name) = version_dirs(installation_dir).first().and_then(|d| d.file_name()) {
+        return Ok(name.to_string_lossy().into_owned());
     }
     Err(CliError::Io(std::io::Error::new(
         std::io::ErrorKind::NotFound,
@@ -2036,6 +2029,21 @@ mod tests {
         // setup() skips its own initdb when this file exists.
         assert!(data_dir.join("postgresql.conf").exists());
 
+        fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn version_dirs_puts_newest_first() {
+        let test_dir = unique_dir("pg0-version-dirs");
+        for v in ["18.1.0", "18.10.0", "18.7.0"] {
+            fs::create_dir_all(test_dir.join(v).join("bin")).unwrap();
+        }
+        fs::write(test_dir.join("18.9.0"), "").unwrap(); // a file, not a version dir
+        fs::create_dir_all(test_dir.join("tmp")).unwrap();
+        let names: Vec<String> = version_dirs(&test_dir).iter()
+            .map(|d| d.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["18.10.0", "18.7.0", "18.1.0"]);
+        assert_eq!(find_installed_version(&test_dir).unwrap(), "18.10.0");
         fs::remove_dir_all(test_dir).unwrap();
     }
 
