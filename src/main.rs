@@ -950,6 +950,9 @@ fn start(
         trust_installation_dir: true, // Use our extracted files
         temporary: false, // Never delete data directory on drop - pg0 manages data lifecycle explicitly
         timeout: Some(std::time::Duration::from_secs(600)), // 10 minute timeout for slow systems (ARM64 emulation under QEMU)
+        // Connect where the psql calls below and the reported URI do. The default, localhost, resolves to ::1 first,
+        // and on Windows a refused loopback connection takes 2 seconds when the server listens on 127.0.0.1 only.
+        host: "127.0.0.1".to_string(),
         ..Default::default()
     };
 
