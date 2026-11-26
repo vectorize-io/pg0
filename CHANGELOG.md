@@ -2,6 +2,22 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [0.18.0] - 2026-11-26
+
+### Security
+
+- Bundle PostgreSQL 18.7.0 (was 18.1.0). This fixes CVE-2026-116331 and includes the security fixes from 18.2 through 18.6 (#53). Existing instances move to 18.7 on their next `pg0 start`. A minor upgrade needs no dump and restore.
+
+### Added
+
+- `pg0 start` reads the password from `PG0_PASSWORD` when `--password` is not given, so it stays out of the process list and shell history (#60).
+
+### Fixed
+
+- Alpine (musl): pgvector now works. The musl binaries bundled the glibc build of pgvector, so `CREATE EXTENSION vector` failed (#54).
+- Windows: `pg0 start` no longer waits about 4 seconds when the server listens on 127.0.0.1 only (#56).
+- After an upgrade, pg0 uses the newest PostgreSQL version folder in the installation directory instead of whichever one the OS lists first.
+
 ## [0.17.0] - 2026-11-17
 
 ### Added
