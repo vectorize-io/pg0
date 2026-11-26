@@ -2,6 +2,13 @@
 
 All notable changes to pg0 are documented in this file.
 
+## [0.18.1] - 2026-11-26
+
+### Fixed
+
+- Smaller binaries: 0.18.0 grew a lot (macOS 91 MB, Alpine 105 MB) because the PostgreSQL 18.7 bundle now includes LLVM for JIT and Python for PL/Python. pg0 now leaves those out. JIT is off, and PL/Python is not available (#61).
+- pg0 now uses the libxml2 and ICU libraries that come with PostgreSQL 18.7, instead of downloading its own copies. This also makes pg0 work on Ubuntu 26.04 (#61).
+
 ## [0.18.0] - 2026-11-26
 
 ### Security
