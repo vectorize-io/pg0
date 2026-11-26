@@ -1,8 +1,7 @@
 #!/bin/bash
 # Test pg0 against the official Ubuntu LTS / interim images.
-# 24.04 (Noble) is currently the only supported LTS; 25.10 (Plucky) and the
-# upcoming 26.04 ship libxml2 2.14 (SONAME .so.16) which breaks the bundled
-# theseus-rs PostgreSQL binary that links against libxml2.so.2.
+# 22.04 is the oldest supported (glibc 2.35 baseline). 25.10+ ship libxml2
+# 2.14 (SONAME .so.16); the PostgreSQL bundle carries its own libxml2.so.2.
 set -u
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -53,12 +52,9 @@ apt-get install -y -qq curl ca-certificates sudo procps tzdata >/dev/null
 apt-get install -y -qq libgssapi-krb5-2 >/dev/null
 # libssl3 is a virtual that resolves to libssl3t64 on 24.04+
 apt-get install -y -qq libssl3 >/dev/null 2>&1 || apt-get install -y -qq libssl3t64 >/dev/null
-# libxml2 was renamed to libxml2-16 in 25.10 (SONAME .so.2 -> .so.16)
-apt-get install -y -qq libxml2 >/dev/null 2>&1 || apt-get install -y -qq libxml2-16 >/dev/null
-# libicu major version varies by release
-apt-get install -y -qq libicu74 >/dev/null 2>&1 || \
-    apt-get install -y -qq libicu76 >/dev/null 2>&1 || \
-    apt-get install -y -qq libicu72 >/dev/null
+# libxml2 and ICU ship inside the PostgreSQL bundle; the system copies are
+# optional (and their package names differ per release).
+apt-get install -y -qq libxml2 >/dev/null 2>&1 || apt-get install -y -qq libxml2-16 >/dev/null 2>&1 || true
 # readline for psql
 apt-get install -y -qq libreadline8 >/dev/null 2>&1 || \
     apt-get install -y -qq libreadline8t64 >/dev/null
@@ -109,7 +105,7 @@ EOF
 }
 
 failures=()
-for image in ubuntu:24.04 ubuntu:25.10; do
+for image in ubuntu:22.04 ubuntu:24.04 ubuntu:25.10 ubuntu:26.04; do
     if ! run_one "$image"; then
         failures+=("$image")
     fi

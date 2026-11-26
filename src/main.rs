@@ -23,7 +23,6 @@ static PGVECTOR_BUNDLE: &[u8] = include_bytes!(env!("PGVECTOR_BUNDLE_PATH"));
 /// loads) that the bundled PostgreSQL binary dynamic-links against. Empty on
 /// platforms where the host reliably provides them (macOS, Windows,
 /// Alpine/musl). See build.rs.
-static RUNTIME_LIBS_BUNDLE: &[u8] = include_bytes!(env!("RUNTIME_LIBS_BUNDLE_PATH"));
 
 #[derive(Error, Debug)]
 enum CliError {
@@ -628,11 +627,8 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
         tracing::debug!("PostgreSQL already extracted at {}", version_dir.display());
     }
 
-    // Always ensure the runtime libs are unpacked and LD_LIBRARY_PATH points
-    // at them. Runs even when the postgres install is cached so users
-    // upgrading from a pg0 version that didn't ship the bundle pick up the
-    // new libs without manually wiping ~/.pg0/installation/.
-    ensure_runtime_libs(&version_dir)?;
+    // Put the bundle's lib/ first on the loader path for initdb, postgres,
+    // pg_ctl and psql.
     #[cfg(target_os = "linux")]
     prepend_lib_dir_to_ld_library_path(&version_dir.join("lib"));
 
@@ -648,96 +644,14 @@ fn extract_bundled_postgresql(installation_dir: &PathBuf, pg_version: &str) -> R
     Ok(version_dir)
 }
 
-/// Unpack RUNTIME_LIBS_BUNDLE into `<version_dir>/lib/` and create the SONAME
-/// symlinks the dynamic linker looks up (e.g. libxml2.so.2 ->
-/// libxml2.so.2.9.14). No-op when the bundle is empty (non-Linux-GNU targets)
-/// or when the libs are already present.
-fn ensure_runtime_libs(version_dir: &Path) -> Result<(), CliError> {
-    if RUNTIME_LIBS_BUNDLE.is_empty() {
-        return Ok(());
-    }
-
-    let lib_dir = version_dir.join("lib");
-    fs::create_dir_all(&lib_dir)?;
-
-    let decoder = GzDecoder::new(RUNTIME_LIBS_BUNDLE);
-    let mut archive = Archive::new(decoder);
-    let mut extracted_names: Vec<String> = Vec::new();
-
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_path_buf();
-        let basename = match path.file_name().and_then(|s| s.to_str()) {
-            Some(name) => name.to_string(),
-            None => continue,
-        };
-        let dest = lib_dir.join(&basename);
-        if !dest.exists() {
-            entry.unpack(&dest)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&dest)?.permissions();
-                perms.set_mode(0o755);
-                let _ = fs::set_permissions(&dest, perms);
-            }
-        }
-        extracted_names.push(basename);
-    }
-
-    // Create SONAME symlinks: libxml2.so.2 -> libxml2.so.2.9.14, etc.
-    // The dynamic linker only looks up files by SONAME (".so.<major>"), not
-    // the fully-versioned filename, so the symlinks are what actually makes
-    // the bundled libs reachable.
-    #[cfg(unix)]
-    for name in &extracted_names {
-        if let Some(soname) = soname_for(name) {
-            let link = lib_dir.join(&soname);
-            if link.exists() {
-                continue;
-            }
-            // Symlink relative to lib_dir so it stays valid if the install
-            // directory is moved.
-            if let Err(e) = std::os::unix::fs::symlink(name, &link) {
-                if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(e.into());
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Given a fully-versioned shared-library filename like
-/// `libxml2.so.2.9.13` or `libicudata.so.70.1`, return the SONAME the dynamic
-/// linker actually resolves: `libxml2.so.2`, `libicudata.so.70`. Returns None
-/// for filenames we don't recognise (so we don't accidentally create bogus
-/// symlinks).
-fn soname_for(filename: &str) -> Option<String> {
-    let so_idx = filename.find(".so.")?;
-    let (stem, rest) = filename.split_at(so_idx + ".so.".len());
-    // `stem` ends with ".so."; `rest` is the version tail e.g. "2.9.14".
-    let major = rest.split('.').next()?;
-    if major.is_empty() {
-        return None;
-    }
-    Some(format!("{}{}", stem, major))
-}
-
-/// Walk up from a `bin/psql` path to the version-specific install dir and
-/// make sure the runtime libs are present + LD_LIBRARY_PATH points at them.
-/// Used by `pg0 psql`, which spawns psql against an instance whose install
-/// directory was set up by an earlier `pg0 start` (possibly from a previous
-/// pg0 release that didn't ship the libs bundle).
+/// Walk up from a `bin/psql` path to the version-specific install dir and put
+/// its lib/ on LD_LIBRARY_PATH. Used by `pg0 psql`.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
 fn ensure_runtime_libs_for_psql(psql_path: &Path) -> Result<(), CliError> {
-    let version_dir = match psql_path.parent().and_then(|p| p.parent()) {
-        Some(p) => p.to_path_buf(),
-        None => return Ok(()),
-    };
-    ensure_runtime_libs(&version_dir)?;
     #[cfg(target_os = "linux")]
-    prepend_lib_dir_to_ld_library_path(&version_dir.join("lib"));
+    if let Some(version_dir) = psql_path.parent().and_then(|p| p.parent()) {
+        prepend_lib_dir_to_ld_library_path(&version_dir.join("lib"));
+    }
     Ok(())
 }
 
@@ -1658,10 +1572,7 @@ fn install_extension(instance_name: String, extension_name: String) -> Result<()
     // Build Settings for the extension installer
     // The installation_dir needs to point to the version-specific directory
     let version_install_dir = info.installation_dir.join(&pg_version);
-    // Make sure the bundled libxml2/libicu are present and on the loader path
-    // before pg_config / pg_ctl are spawned on a host where the system libs
-    // are missing or have a different SONAME.
-    ensure_runtime_libs(&version_install_dir)?;
+    // Put the bundle's lib/ on the loader path before pg_config / pg_ctl run.
     #[cfg(target_os = "linux")]
     prepend_lib_dir_to_ld_library_path(&version_install_dir.join("lib"));
     let settings = Settings {
