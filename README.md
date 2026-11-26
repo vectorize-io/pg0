@@ -409,10 +409,21 @@ Options:
   -p, --port <PORT>           Port to listen on [default: 5432]
   -d, --data-dir <DATA_DIR>   Data directory [default: ~/.pg0/instances/<name>/data]
   -u, --username <USERNAME>   Username [default: postgres]
-  -P, --password <PASSWORD>   Password [default: postgres]
+  -P, --password <PASSWORD>   Password [env: PG0_PASSWORD] [default: postgres]
   -n, --database <DATABASE>   Database name [default: postgres]
   -c, --config <KEY=VALUE>    PostgreSQL config option (can repeat)
 ```
+
+To keep the password out of the process list and your shell history, set it in
+`PG0_PASSWORD` instead of passing `--password`. An explicit `--password` wins.
+
+```bash
+export PG0_PASSWORD='s3cret'
+pg0 start --name myapp
+```
+
+pg0 still saves the password in the instance's metadata (`~/.pg0/instances/<name>/instance.json`)
+so `psql`, `info` and `ui` can connect later, and prints it in the connection URI.
 
 ### PostgreSQL Configuration
 
