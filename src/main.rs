@@ -487,7 +487,7 @@ fn extract_postgresql_archive(bundle: &[u8], version_dir: &std::path::Path) -> R
         if stripped_path.as_os_str().is_empty() {
             continue;
         }
-        if cfg!(target_os = "linux") && is_newer_glibc_lib(&stripped_path) {
+        if cfg!(all(target_os = "linux", target_env = "gnu")) && is_newer_glibc_lib(&stripped_path) {
             continue;
         }
 
