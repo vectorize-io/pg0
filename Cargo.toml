@@ -44,7 +44,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 # .deb files are ar archives wrapping a zstd-compressed tar; we crack them open
 # at build time to extract libxml2.so.2 and the ICU 74 .so files so they can
 # be bundled into the pg0 binary.
-ar = "0.9"
 zstd = "0.13"
 tar = "0.4"
 flate2 = "1"
