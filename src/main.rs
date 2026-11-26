@@ -88,8 +88,9 @@ enum Commands {
         #[arg(short, long, default_value = "postgres")]
         username: String,
 
-        /// Password for the database
-        #[arg(short = 'P', long, default_value = "postgres")]
+        /// Password for the database. Also read from PG0_PASSWORD, which keeps it
+        /// out of the process list and shell history
+        #[arg(short = 'P', long, env = "PG0_PASSWORD", hide_env_values = true, default_value = "postgres")]
         password: String,
 
         /// Database name to create
